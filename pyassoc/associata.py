@@ -178,7 +178,7 @@ class AGDS(AAS):
 
 
     def _parse_excitation_response(self, message):
-        return self._parse_response(message, '{{excitations,[{exc_values}]}}', 
+        return self._parse_response(message, '{{excitations,{exc_values}}}', 
                                     lambda exc: {r[0].strip(): float(r[1].strip()) for r in parse.findall('{{{},{}}}', exc.named['exc_values'])})
     
     def _parse_neighbours_response(self, message):
