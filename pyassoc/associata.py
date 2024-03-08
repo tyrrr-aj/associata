@@ -182,9 +182,9 @@ class AGDS(AAS):
                                     lambda exc: {r[0].strip(): float(r[1].strip()) for r in parse.findall('{{{},{}}}', exc.named['exc_values'])})
     
     def _parse_neighbours_response(self, message):
-        return self._parse_response(message, '{{neighbours, {neighbours}}}', 
-                                    lambda neighs: [('vn', vn.named['vng_name'], vn.named['repr_value']) for vn in parse.findall('{{vn,"{vng_name}",{repr_value}}}', neighs)]
-                                    + [('on', int(on.named['on_index'])) for on in parse.findall('{{on,{on_index}}}', neighs)])
+        return self._parse_response(message, '{{neighbours,{neighbours}}}', 
+                                    lambda neighs: [('vn', vn.named['vng_name'], vn.named['repr_value']) for vn in parse.findall('{{vn,"{vng_name}",{repr_value}}}', neighs.named['neighbours'])]
+                                    + [('on', int(on.named['on_index'])) for on in parse.findall('{{on,{on_index}}}', neighs.named['neighbours'])])
     
     
     def _parse_response(self, message, pattern, transformation):
@@ -284,7 +284,7 @@ def _start_backend():
 
     try:
         _asvis_proc, _asvis_log = _start_subprocess([R'C:\Users\adams\Doktorat\aasociata\asvis\asvis.cmd', R'C:\Users\adams\Doktorat\RL\experiments'], vis_start_timeout_seconds, 'vis')
-        _aas_proc, _aas_log = _start_subprocess([R'C:\Users\adams\Doktorat\aasociata\aas\_build\default\rel\aas\bin\aas.cmd', 'foreground'], backend_start_timeout_seconds, 'backend')
+        _aas_proc, _aas_log = _start_subprocess([R'C:\Users\adams\Doktorat\aasociata\aas-engine\_build\default\rel\aas\bin\aas.cmd', 'foreground'], backend_start_timeout_seconds, 'backend')
     except RuntimeError as e:
         print(f'ERROR: Failed to start backend: {e}')
         stop()
