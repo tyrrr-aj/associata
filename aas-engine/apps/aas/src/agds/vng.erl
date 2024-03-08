@@ -109,14 +109,9 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
 
 
         {stimulate, all, repr_value, MaxDepth, StimulationKind} ->
-            Scaler = case vng_range(MinValue, MaxValue) of
-                0.0 -> 1.0; 
-                VNGRange -> VNGRange
-            end,
-
             case VNGType of
-                categorical -> lists:foreach(fun({Value, VN}) -> vn:stimulate(VN, self(), Value / Scaler, 0, MaxDepth, StimulationKind) end, maps:to_list(VNs));
-                numerical -> avb_tree:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), Value / Scaler, 0, MaxDepth, StimulationKind) end, VNs)
+                categorical -> lists:foreach(fun({Value, VN}) -> vn:stimulate(VN, self(), Value, 0, MaxDepth, StimulationKind) end, maps:to_list(VNs));
+                numerical -> avb_tree:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), Value, 0, MaxDepth, StimulationKind) end, VNs)
             end,
 
             process_events(State);
