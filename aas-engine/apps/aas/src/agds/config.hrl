@@ -1,0 +1,1 @@
+-record(global_cfg, {reporter, timestep_ms}).

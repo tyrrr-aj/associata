@@ -1,0 +1,3 @@
+Funkcjonalność do rozważenia:
+przesłanie tylko struktury i końcowych stymulacji
+"lekkie" zbieranie danych, na koniec przesłanie wszystkeigo lub zapis do pliku

@@ -1,0 +1,16 @@
+{application, aas,
+ [{description, "Backend of 'associata' library for effective associative computations"},
+  {vsn, "0.1.0"},
+  {registered, []},
+  {mod, {aas_app, []}},
+  {applications,
+   [kernel,
+    stdlib,
+    amqp_client
+   ]},
+  {env,[]},
+  {modules, []},
+
+  {licenses, ["Apache-2.0"]},
+  {links, []}
+ ]}.

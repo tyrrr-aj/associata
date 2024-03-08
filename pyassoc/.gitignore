@@ -1,0 +1,7 @@
+__pycache__
+.conda
+.vscode
+experiments
+models
+*.log
+erl_crash.dump

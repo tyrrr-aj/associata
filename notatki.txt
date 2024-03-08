@@ -1,0 +1,19 @@
+Sposób uruchomienia całości:
+- albo wywołanie Erlanga z pythona (najpewniej przez command line)
+- albo osobny .bat odpalający całość
+
+wizualizacja nie wspiera wielokrotnego tworzenia i usuwania krawędzi pomiędzy tymi samymi wierzchołkami
+
+
+do zrobienia:
+- moduuł w Javie wykonujący przygotoawnie wizualne grafu w Gephi (layout, kolory, wielkości, etykiety) - dla AGDS, potem łatwo będzie dodać dla innych struktur
+- zintegrować w całość:
+    - do rozważenia: olać Pythona i networkx, przenieść całość do Javy
+    - uruchamiać cały eksport .gexf/.gephi jako podproces Reportera, z commandline'a (możliwe do wyłączenia razem z całym reporterem), z kolejką RabbitMQ tworzoną ad hoc (albo i z prostszą komunikacją)
+- implementacja as-neuronu w Erlangu w ramach biblioteki
+- (potencjalnie poszczególne struktury asocjacyjne w Erlangu wraz z modułami Java przygotowującymi wizualizację w Gephi)
+
+
+Naukowo ;) :
+- koncepcja badań pomniejszych
+- kontekst (przegląd literatury, state-of-the-art)

@@ -1,0 +1,15 @@
+Funkcjonalność niezbędna:
+- odczyt wiadomości z RabbitMQ w czasie rzeczywistym
+- wyświetlenie zbudowanego/budowanego grafu
+- wyświetlenie pobudzeń wierzchołków
+- wyświetlenie aktywacji połączeń
+
+Funkcjonalność do rozważenia:
+- podgląd wartości poszczególnych aktywacji
+- wykresy aktywacji dla poszczególnych wierzchołków/połączeń
+- skalowanie czasu
+- wielokrotne odtwarzanie animacji
+- przewijanie animacji
+
+
+...Gephi + networkx!

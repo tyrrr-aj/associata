@@ -1,0 +1,3 @@
+[submodule "pyassoc/Gymnasium"]
+	path = pyassoc/Gymnasium
+	url = https://github.com/Farama-Foundation/Gymnasium.git
