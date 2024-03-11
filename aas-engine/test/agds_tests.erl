@@ -1,4 +1,4 @@
-% -module(agds_tests).
+-module(agds_tests).
 % -include_lib("eunit/include/eunit.hrl").
 
 

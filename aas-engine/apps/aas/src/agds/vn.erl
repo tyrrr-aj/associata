@@ -149,6 +149,7 @@ process_events(#state{
 
 
         {connect_VN, NewConnectedVN, ConnectedVNValue} ->
+            io:format("RepresentedValue: ~p  ConnectedVNValue: ~p~n", [RepresentedValue, ConnectedVNValue]),
             if
                 % no need to handle categorical VN case - connect_VN should never be called on such VN
                 ConnectedVNValue < RepresentedValue -> 

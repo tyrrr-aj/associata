@@ -24,25 +24,29 @@ class AgdsLogger:
 
     def start(self):
         print(f'AGDS Logger for {self._structure_id} started')
+        self._started = True
         self._channel.respond(b'"vis_setup_done"')
         threading.Thread(target=self._channel.listen, args=(self.on_log_message,)).start()
 
 
     def finish(self, timestamp=None):
-        if timestamp is None:
-            if self._last_known_timestamp is not None:
-                timestamp = self._last_known_timestamp + 1.0
-            else:
-                timestamp = self._time_origin + 1.0
-        self._observed_graph.close_all_time_ranges(timestamp)
-        
+        if self._started:
+            if timestamp is None:
+                if self._last_known_timestamp is not None:
+                    timestamp = self._last_known_timestamp + 1.0
+                else:
+                    timestamp = self._time_origin + 1.0
+            self._observed_graph.close_all_time_ranges(timestamp)
+            
 
-        out_file = f'agds[{self._structure_id}]_{datetime.datetime.now().strftime("%Y-%m-%d#%H_%M_%S")}.gexf'
-        out_file_path = os.path.join(self._out_path, out_file)
-        self._observed_graph.export(out_file_path)
+            out_file = f'agds[{self._structure_id}]_{datetime.datetime.now().strftime("%Y-%m-%d#%H_%M_%S")}.gexf'
+            out_file_path = os.path.join(self._out_path, out_file)
+            self._observed_graph.export(out_file_path)
 
-        self._channel.respond(b'"vis_stopped"')
-        self._channel.close()
+            self._channel.respond(b'"vis_stopped"')
+            self._channel.close()
+
+            self._started = False
 
 
     def on_log_message(self, message):

@@ -1,6 +1,8 @@
 -module(avb_tree_tests).
 -include_lib("eunit/include/eunit.hrl").
 
+-record(tree, {root, epsilon}).
+
 
 % ****************************** BUILD TREE TESTS ******************************
 
@@ -20,11 +22,11 @@ build_test_() ->
 
 
 
-create_tree() -> avb_tree:create(0).
+create_tree() -> avb_tree:create(0.01).
 
 
 
-test_tree_is_empty(AVBTree) -> ?_assertEqual(no_node, AVBTree).
+test_tree_is_empty(AVBTree) -> ?_assertMatch(#tree{root=no_node}, AVBTree).
 
 
 
@@ -43,70 +45,70 @@ test_adding_keys_to_leaf(AVBTree) ->
     ].
 
 
-test_leaf_add_single_key(AVBTree) -> ?_assertEqual({{no_node, {1, stored_value, 1}, no_node, no_content, no_node}, stored_value}, avb_tree:add(AVBTree, 1, fun() -> stored_value end)).
+test_leaf_add_single_key(AVBTree) -> ?_assertMatch({#tree{root={no_node, {1, stored_value, 1}, no_node, no_content, no_node}}, stored_value}, avb_tree:add(AVBTree, 1, fun() -> stored_value end)).
 
 test_leaf_add_second_smaller_key(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_0} = avb_tree:add(AVBTree1, 0, fun() -> stored_value_0 end),
-    ?_assertEqual({no_node, {0, stored_value_0, 1}, no_node, {1, stored_value_1, 1}, no_node}, AVBTree2).
+    ?_assertMatch(#tree{root={no_node, {0, stored_value_0, 1}, no_node, {1, stored_value_1, 1}, no_node}}, AVBTree2).
 
 test_leaf_add_second_equal_key_with_same_value(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_1} = avb_tree:add(AVBTree1, 1, fun() -> stored_value_1 end),
-    ?_assertEqual({no_node, {1, stored_value_1, 2}, no_node, no_content, no_node}, AVBTree2).
+    ?_assertMatch(#tree{root={no_node, {1, stored_value_1, 2}, no_node, no_content, no_node}}, AVBTree2).
 
 test_leaf_add_second_equal_key_with_different_value(AVBTree) ->
     % new value should be ignored
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_1} = avb_tree:add(AVBTree1, 1, fun() -> stored_value_diff end),
-    ?_assertEqual({no_node, {1, stored_value_1, 2}, no_node, no_content, no_node}, AVBTree2).
+    ?_assertMatch(#tree{root={no_node, {1, stored_value_1, 2}, no_node, no_content, no_node}}, AVBTree2).
 
 test_leaf_add_second_bigger_key(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_2} = avb_tree:add(AVBTree1, 2, fun() -> stored_value_2 end),
-    ?_assertEqual({no_node, {1, stored_value_1, 1}, no_node, {2, stored_value_2, 1}, no_node}, AVBTree2).
+    ?_assertMatch(#tree{root={no_node, {1, stored_value_1, 1}, no_node, {2, stored_value_2, 1}, no_node}}, AVBTree2).
 
 test_leaf_add_third_key_already_present(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_2} = avb_tree:add(AVBTree1, 2, fun() -> stored_value_2 end),
     {AVBTree3, stored_value_2} = avb_tree:add(AVBTree2, 2, fun() -> stored_value_2 end),
-    ?_assertEqual({no_node, {1, stored_value_1, 1}, no_node, {2, stored_value_2, 2}, no_node}, AVBTree3).
+    ?_assertMatch(#tree{root={no_node, {1, stored_value_1, 1}, no_node, {2, stored_value_2, 2}, no_node}}, AVBTree3).
 
 test_leaf_add_third_key_left_new_root(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_2} = avb_tree:add(AVBTree1, 2, fun() -> stored_value_2 end),
     {AVBTree3, stored_value_0} = avb_tree:add(AVBTree2, 0, fun() -> stored_value_0 end),
-    ?_assertEqual({
+    ?_assertMatch(#tree{root={
         {no_node, {0, stored_value_0, 1}, no_node, no_content, no_node}, 
         {1, stored_value_1, 1}, 
         {no_node, {2, stored_value_2, 1}, no_node, no_content, no_node}, 
         no_content, 
         no_node
-    }, AVBTree3).
+    }}, AVBTree3).
 
 test_leaf_add_third_key_middle_new_root(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_2} = avb_tree:add(AVBTree1, 2, fun() -> stored_value_2 end),
     {AVBTree3, stored_value_1_5} = avb_tree:add(AVBTree2, 1.5, fun() -> stored_value_1_5 end),
-    ?_assertEqual({
+    ?_assertMatch(#tree{root={
         {no_node, {1, stored_value_1, 1}, no_node, no_content, no_node}, 
         {1.5, stored_value_1_5, 1}, 
         {no_node, {2, stored_value_2, 1}, no_node, no_content, no_node}, 
         no_content, 
         no_node
-    }, AVBTree3).
+    }}, AVBTree3).
 
 test_leaf_add_third_key_right_new_root(AVBTree) ->
     {AVBTree1, stored_value_1} = avb_tree:add(AVBTree, 1, fun() -> stored_value_1 end),
     {AVBTree2, stored_value_2} = avb_tree:add(AVBTree1, 2, fun() -> stored_value_2 end),
     {AVBTree3, stored_value_3} = avb_tree:add(AVBTree2, 3, fun() -> stored_value_3 end),
-    ?_assertEqual({
+    ?_assertMatch(#tree{root={
         {no_node, {1, stored_value_1, 1}, no_node, no_content, no_node}, 
         {2, stored_value_2, 1}, 
         {no_node, {3, stored_value_3, 1}, no_node, no_content, no_node}, 
         no_content, 
         no_node
-    }, AVBTree3).
+    }}, AVBTree3).
     
 
 
@@ -127,13 +129,13 @@ test_splitting_child_nodes() ->
 test_accept_new_second_value_left(SampleAVBTree) ->
     StoredValue = sample_stored_value(10.5),
     {
-        {
+        #tree{root={
             _LeftSubtree, 
             _LeftContent,
             MiddleSubtree,
             no_content,
             no_node
-        },
+        }},
         StoredValue
     } = avb_tree:add(SampleAVBTree, 10.5, fun() -> StoredValue end),
     ?_assertEqual(
@@ -151,23 +153,23 @@ test_accept_new_second_value_left(SampleAVBTree) ->
 test_accept_new_second_value_right(SampleAVBTree) ->
     StoredValue = sample_stored_value(12.5),
     {
-        {
+        #tree{root={
             _LeftSubtree, 
             _LeftContent,
             MiddleSubtree,
             no_content,
             no_node
-        },
+        }},
         StoredValue
     } = avb_tree:add(SampleAVBTree, 12.5, fun() -> StoredValue end),
     ?_assertEqual(
-        {
+        #tree{root={
             sample_leaf(9, 10),
             sample_content(11),
             sample_leaf(12),
             sample_content(12.5),
             sample_leaf(13)
-        },
+        }},
         MiddleSubtree
     ).
 
@@ -175,13 +177,13 @@ test_accept_new_second_value_right(SampleAVBTree) ->
 test_accept_new_third_value_left(SampleAVBTree) ->
     StoredValue = sample_stored_value(-0.5),
     {
-        {
+        #tree{root={
             LeftSubtree,
             LeftContent,
             MiddleSubtree,
             _RightContent,
             _RightSubtree
-        },
+        }},
         StoredValue
     } = avb_tree:add(SampleAVBTree, -0.5, fun() -> StoredValue end),
     [
@@ -211,13 +213,13 @@ test_accept_new_third_value_left(SampleAVBTree) ->
 test_accept_new_third_value_middle(SampleAVBTree) ->
     StoredValue = sample_stored_value(3.5),
     {
-        {
+        #tree{root={
             LeftSubtree,
             LeftContent,
             MiddleSubtree,
             _RightContent,
             _RightSubtree
-        },
+        }},
         StoredValue
     } = avb_tree:add(SampleAVBTree, 3.5, fun() -> StoredValue end),
     [
@@ -247,13 +249,13 @@ test_accept_new_third_value_middle(SampleAVBTree) ->
 test_accept_new_third_value_right(SampleAVBTree) ->
     StoredValue = sample_stored_value(5.5),
     {
-        {
-            LeftSubtree,
-            LeftContent,
-            MiddleSubtree,
-            _RightContent,
-            _RightSubtree
-        },
+        #tree{root={
+                LeftSubtree,
+                LeftContent,
+                MiddleSubtree,
+                _RightContent,
+                _RightSubtree
+            }},
         StoredValue
     } = avb_tree:add(SampleAVBTree, 5.5, fun() -> StoredValue end),
     [
@@ -350,10 +352,10 @@ get_neighbours_test_() ->
     }.
 
 test_get_neighbours_empty_tree() ->
-    ?_assertEqual({none, none}, avb_tree:get_neighbours(avb_tree:create(0.0), 5)).
+    ?_assertEqual({none, none}, avb_tree:get_neighbours(avb_tree:create(0.1), 5)).
 
 test_get_neighbours_no_neighs() ->
-    EmptyTree = avb_tree:create(0.0),
+    EmptyTree = avb_tree:create(0.1),
     StoredValue = sample_stored_value(1),
     {SingleNodeTree, StoredValue} = avb_tree:add(EmptyTree, 1, fun() -> StoredValue end),
     ?_assertEqual({none, none}, avb_tree:get_neighbours(SingleNodeTree, 1)).
@@ -412,24 +414,27 @@ test_get_minmax(AVBTree, ExpectedMin, ExpectedMax) ->
 % ****************************** HELPERS ******************************
 
 sample_tree() -> 
-    {
+    #tree{root = 
         {
-            sample_leaf(0, 1),
-            sample_content(2),
-            sample_leaf(3, 4),
-            sample_content(5),
-            sample_leaf(6, 7)
-        },
-        sample_content(8),
-        {
-            sample_leaf(9, 10),
-            sample_content(11),
-            sample_leaf(12, 13),
+            {
+                sample_leaf(0, 1),
+                sample_content(2),
+                sample_leaf(3, 4),
+                sample_content(5),
+                sample_leaf(6, 7)
+            },
+            sample_content(8),
+            {
+                sample_leaf(9, 10),
+                sample_content(11),
+                sample_leaf(12, 13),
+                no_content,
+                no_node
+            },
             no_content,
             no_node
         },
-        no_content,
-        no_node
+        epsilon = 0.1
     }.
 
 

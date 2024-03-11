@@ -86,11 +86,13 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
                     
                     Neighs = avb_tree:get_neighbours(NewVNs, AddedValue),
 
+                    io:format("VNG: ~p  AddedValue: ~p  Neighs: ~p~n", [VNGName, AddedValue, Neighs]),
+
                     lists:foreach(
                         fun(Neigh) -> case Neigh of
                             none -> ok;
-                            {NeighValue, NeighVN} ->
-                                vn:connect_VN(VN, NeighVN, NeighValue),
+                            {NeighReprValue, NeighVN} ->
+                                vn:connect_VN(VN, NeighVN, NeighReprValue),
                                 vn:connect_VN(NeighVN, VN, AddedValue),
                                 report:connection_formed(VN, NeighVN, Reporter)
                             end
@@ -127,10 +129,15 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
                 numerical ->
                     case avb_tree:get_nearest(VNs, Value) of
                         {exact_match, VN} -> vn:stimulate(VN, self(), Stimulation, 0, MaxDepth, StimulationKind);
-                        {none, none} -> ok;
-                        {{LeftVNValue, LeftVN}, {RightVNValue, RightVN}} ->
-                            vn:stimulate(LeftVN, self(), get_nearby_VN_stimuli(Value, LeftVNValue, MaxValue - MinValue, Stimulation), 0, MaxDepth, StimulationKind),
-                            vn:stimulate(RightVN, self(), get_nearby_VN_stimuli(Value, RightVNValue, MaxValue - MinValue, Stimulation), 0, MaxDepth, StimulationKind)
+                        {LeftNeigh, RightNeigh} ->
+                            case LeftNeigh of
+                                none -> ok;
+                                {LeftVNValue, LeftVN} -> vn:stimulate(LeftVN, self(), get_nearby_VN_stimuli(Value, LeftVNValue, vng_range(MinValue, MaxValue), Stimulation), 0, MaxDepth, StimulationKind)
+                            end,
+                            case RightNeigh of
+                                none -> ok;
+                                {RightVNValue, RightVN} -> vn:stimulate(RightVN, self(), get_nearby_VN_stimuli(Value, RightVNValue, vng_range(MinValue, MaxValue), Stimulation), 0, MaxDepth, StimulationKind)
+                            end
                     end
             end,
 
@@ -188,7 +195,9 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
     end.
 
 
-vng_range(none, none) -> 0.0;
+vng_range(none, none) -> 1.0;
+
+vng_range(TheOnlyValue, TheOnlyValue) -> 1.0;
 
 vng_range(MinValue, MaxValue) -> MaxValue - MinValue.
 

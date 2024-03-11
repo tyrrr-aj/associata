@@ -17,3 +17,10 @@ do zrobienia:
 Naukowo ;) :
 - koncepcja badań pomniejszych
 - kontekst (przegląd literatury, state-of-the-art)
+
+
+
+
+SarsaAGDS:
+- use excitation of best sa as alpha parameter (dynamic step size equal to/proportional to strength of association)
+- use value(best_sa) to form dynamic greede_epsilon (tend to explore more if known actions are unsatisfactory, possibly decay over time (to avoid precise manual tuning))

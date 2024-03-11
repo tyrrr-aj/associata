@@ -137,7 +137,9 @@ class AGDS(AAS):
         self._channel.send_backend(f'{{add_vng,"{name}",categorical}}.')
 
     def add_observation(self, vng_values):
-        self._channel.send_backend(f'{{add_observation,{self._dict_to_erl_map_repr(vng_values)}}}.')
+        add_observation_cmd = f'{{add_observation,{self._dict_to_erl_map_repr(vng_values)}}}.'
+        print(f'Adding observation: {add_observation_cmd}')
+        self._channel.send_backend(add_observation_cmd)
     
     def infere(self, inference_setup, max_depth):
         self.reset_excitation()
@@ -158,15 +160,19 @@ class AGDS(AAS):
             # wait for completion?
 
     def get_excitations_for_vng(self, vng_name):
+        self._query_response = None
         return self._query_backend(f'{{get_excitation,vng,"{vng_name}"}}.', self._parse_excitation_response)
     
     def get_excitations_for_ong(self):
+        self._query_response = None
         return self._query_backend('{get_excitation,ong}.', self._parse_excitation_response)
 
     def get_vn_neighbours(self, vng_name, vn_value):
+        self._query_response = None
         return self._query_backend(f'{{get_neighbours,vn,"{vng_name}",{vn_value}}}.', self._parse_neighbours_response)
     
     def get_on_neighbours(self, on_index):
+        self._query_response = None
         return self._query_backend(f'{{get_neighbours,on,{on_index}}}.', self._parse_neighbours_response)
         
 
@@ -188,7 +194,7 @@ class AGDS(AAS):
     
     
     def _parse_response(self, message, pattern, transformation):
-        print(f'Got message: {message}')
+        # print(f'Got message: {message}')
 
         if result := parse.parse(pattern, message.decode()):
             self._query_response = transformation(result)
@@ -283,7 +289,7 @@ def _start_backend():
     global _aas_proc, _aas_log, _asvis_proc, _asvis_log
 
     try:
-        _asvis_proc, _asvis_log = _start_subprocess([R'C:\Users\adams\Doktorat\aasociata\asvis\asvis.cmd', R'C:\Users\adams\Doktorat\RL\experiments'], vis_start_timeout_seconds, 'vis')
+        _asvis_proc, _asvis_log = _start_subprocess([R'C:\Users\adams\Doktorat\aasociata\asvis\asvis.cmd', R'C:\Users\adams\Doktorat\aasociata\pyassoc\experiments'], vis_start_timeout_seconds, 'vis')
         _aas_proc, _aas_log = _start_subprocess([R'C:\Users\adams\Doktorat\aasociata\aas-engine\_build\default\rel\aas\bin\aas.cmd', 'foreground'], backend_start_timeout_seconds, 'backend')
     except RuntimeError as e:
         print(f'ERROR: Failed to start backend: {e}')
