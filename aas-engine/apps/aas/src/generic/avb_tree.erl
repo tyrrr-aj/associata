@@ -10,10 +10,11 @@
 create(Epsilon) -> #tree{root=no_node, epsilon=Epsilon}.
 
 
+%%% returns modified tree, {new_value, NewValue} | {existing_value, ExistingValue}
 add(#tree{root=no_node} = Tree, NewKey, NewValueConstructor) -> 
     NewValue = NewValueConstructor(),
     NewRoot = {no_node, {NewKey, NewValue, 1}, no_node, no_content, no_node},
-    {Tree#tree{root=NewRoot}, NewValue};
+    {Tree#tree{root=NewRoot}, {new_value, NewValue}};
     
 add(#tree{root=Root, epsilon=Epsilon} = Tree, NewKey, NewValueConstructor) -> 
     case insert_down(Root, NewKey, NewValueConstructor, Epsilon) of
@@ -73,33 +74,33 @@ items(#tree{root=Root}) -> items_impl(Root).
 %% insert_down: value already stored
 
 insert_down({LeftChild, {LeftKey, LeftValue, LeftOccurances}, MiddleChild, RightValue, RightChild}, NewKey, _NewValueConstructor, Epsilon) when abs(LeftKey - NewKey) < Epsilon -> 
-    {no_split, {LeftChild, {LeftKey, LeftValue, LeftOccurances + 1}, MiddleChild, RightValue, RightChild}, LeftValue};
+    {no_split, {LeftChild, {LeftKey, LeftValue, LeftOccurances + 1}, MiddleChild, RightValue, RightChild}, {existing_value, LeftValue}};
 
 insert_down({LeftChild, LeftValue, MiddleChild, {RightKey, RightValue, RightOccurances}, RightChild}, NewKey, _NewValueConstructor, Epsilon) when abs(RightKey - NewKey) < Epsilon -> 
-    {no_split, {LeftChild, LeftValue, MiddleChild, {RightKey, RightValue, RightOccurances + 1}, RightChild}, RightValue};
+    {no_split, {LeftChild, LeftValue, MiddleChild, {RightKey, RightValue, RightOccurances + 1}, RightChild}, {existing_value, RightValue}};
 
 
 %% insert_down: leaves
 
 insert_down({no_node, {LeftKey, _LeftValue, _LeftOccurances} = LeftContent, no_node, no_content, no_node}, NewKey, NewValueConstructor, _Epsilon) when NewKey < LeftKey -> 
     NewValue = NewValueConstructor(),
-    {no_split, {no_node, {NewKey, NewValue, 1}, no_node, LeftContent, no_node}, NewValue};
+    {no_split, {no_node, {NewKey, NewValue, 1}, no_node, LeftContent, no_node}, {new_value, NewValue}};
 
 insert_down({no_node, {LeftKey, _LeftValue, _LeftOccurances} = LeftContent, no_node, no_content, no_node}, NewKey, NewValueConstructor, _Epsilon) when NewKey > LeftKey -> 
     NewValue = NewValueConstructor(),
-    {no_split, {no_node, LeftContent, no_node, {NewKey, NewValue, 1}, no_node}, NewValue};
+    {no_split, {no_node, LeftContent, no_node, {NewKey, NewValue, 1}, no_node}, {new_value, NewValue}};
     
 insert_down({no_node, {LeftKey, _LeftValue, _LeftOccurances} = LeftContent, no_node, RightContent, no_node}, NewKey, NewValueConstructor, _Epsilon) when NewKey < LeftKey -> 
     NewValue = NewValueConstructor(),
-    {split, {no_node, {NewKey, NewValue, 1}, no_node, no_content, no_node}, LeftContent, {no_node, RightContent, no_node, no_content, no_node}, NewValue};
+    {split, {no_node, {NewKey, NewValue, 1}, no_node, no_content, no_node}, LeftContent, {no_node, RightContent, no_node, no_content, no_node}, {new_value, NewValue}};
 
 insert_down({no_node, LeftContent, no_node, {RightKey, _RightValue, _RightOccurances} = RightContent, no_node}, NewKey, NewValueConstructor, _Epsilon) when NewKey < RightKey -> 
     NewValue = NewValueConstructor(),
-    {split, {no_node, LeftContent, no_node, no_content, no_node}, {NewKey, NewValue, 1}, {no_node, RightContent, no_node, no_content, no_node}, NewValue};
+    {split, {no_node, LeftContent, no_node, no_content, no_node}, {NewKey, NewValue, 1}, {no_node, RightContent, no_node, no_content, no_node}, {new_value, NewValue}};
 
 insert_down({no_node, LeftContent, no_node, {RightKey, _RightValue, _RightOccurances} = RightContent, no_node}, NewKey, NewValueConstructor, _Epsilon) when NewKey > RightKey -> 
     NewValue = NewValueConstructor(),
-    {split, {no_node, LeftContent, no_node, no_content, no_node}, RightContent, {no_node, {NewKey, NewValue, 1}, no_node, no_content, no_node}, NewValue};
+    {split, {no_node, LeftContent, no_node, no_content, no_node}, RightContent, {no_node, {NewKey, NewValue, 1}, no_node, no_content, no_node}, {new_value, NewValue}};
 
 
 %% insert_down: middle nodes

@@ -82,23 +82,28 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
                         true -> NewMinValue = MinValue, NewMaxValue = MaxValue
                     end,
 
-                    {NewVNs, VN} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(AddedValue, vng_range(NewMinValue, NewMaxValue), VNGName, self(), GlobalCfg) end),
-                    
-                    Neighs = avb_tree:get_neighbours(NewVNs, AddedValue),
+                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(AddedValue, vng_range(NewMinValue, NewMaxValue), VNGName, self(), GlobalCfg) end),
+                        
+                    case IsNew of
+                        new_value ->
+                            Neighs = avb_tree:get_neighbours(NewVNs, AddedValue),
 
-                    io:format("VNG: ~p  AddedValue: ~p  Neighs: ~p~n", [VNGName, AddedValue, Neighs]),
+                            % io:format("VNG: ~p  AddedValue: ~p  Neighs: ~p  Tree: ~p~n", [VNGName, AddedValue, Neighs, NewVNs]),
 
-                    lists:foreach(
-                        fun(Neigh) -> case Neigh of
-                            none -> ok;
-                            {NeighReprValue, NeighVN} ->
-                                vn:connect_VN(VN, NeighVN, NeighReprValue),
-                                vn:connect_VN(NeighVN, VN, AddedValue),
-                                report:connection_formed(VN, NeighVN, Reporter)
-                            end
-                        end, 
-                        tuple_to_list(Neighs)
-                    )
+                            lists:foreach(
+                                fun(Neigh) -> case Neigh of
+                                    none -> ok;
+                                    {NeighReprValue, NeighVN} ->
+                                        vn:connect_VN(VN, NeighVN, NeighReprValue),
+                                        vn:connect_VN(NeighVN, VN, AddedValue),
+                                        report:connection_formed(VN, NeighVN, Reporter)
+                                    end
+                                end, 
+                                tuple_to_list(Neighs)
+                            );
+
+                        existing_value -> ok
+                    end
             end,
 
             vn:connect_ON(VN, RespectiveON),

@@ -135,8 +135,7 @@ class AgdsLogger:
         rel_time = time - self._time_origin
         rel_seq = seq - self._seq_origin
 
-        #timestamp = float(f'{rel_time}.{rel_seq}')     # rel_seq used like that breaks chronology (seq=9 > seq=10)
-        timestamp = float(rel_time)
+        timestamp = rel_time + rel_seq / 10**9  # TODO: may fail for too long experiments
         self._last_known_timestamp = timestamp
 
         return timestamp

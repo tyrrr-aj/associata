@@ -45,4 +45,5 @@ class Graph:
     def _close_attribute_time_range(self, node_id, attribute, closing_time):
         node = self.graph.nodes[node_id]
         last_entry = node[attribute][-1]
-        node[attribute][-1] = (*last_entry, closing_time)
+        if len(last_entry) == 2:
+            node[attribute][-1] = (*last_entry, closing_time)
