@@ -157,7 +157,7 @@ class AGDS(AAS):
         if self._stimulated:
             self._stimulated = False
             self._channel.send_backend(f'reset_excitation.')
-            # wait for completion?
+            self._channel.receive_backend(self._query_timeout_sec, lambda message: message == b'"excitation_reset_finished"')
 
     def get_excitations_for_vng(self, vng_name):
         self._query_response = None

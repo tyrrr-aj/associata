@@ -31,7 +31,11 @@ get_excitation(VNG) ->
     end.
 
 
-reset_excitation(VNG) -> VNG ! reset_excitation.
+reset_excitation(VNG) -> 
+    VNG ! {reset_excitation, self()},
+    receive
+        reset_excitation_finished -> ok
+    end.
 
 
 get_neighbours(VNG, Value) -> 
@@ -117,8 +121,9 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
 
         {stimulate, all, repr_value, MaxDepth, StimulationKind} ->
             case VNGType of
-                categorical -> lists:foreach(fun({Value, VN}) -> vn:stimulate(VN, self(), Value, 0, MaxDepth, StimulationKind) end, maps:to_list(VNs));
-                numerical -> avb_tree:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), Value, 0, MaxDepth, StimulationKind) end, VNs)
+                %% TODO: Value * 4 is temporary, should be either number of VNGs or accepted as parameter
+                categorical -> lists:foreach(fun({Value, VN}) -> vn:stimulate(VN, self(), Value * 4, 0, MaxDepth, StimulationKind) end, maps:to_list(VNs));
+                numerical -> avb_tree:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), Value * 4, 0, MaxDepth, StimulationKind) end, VNs)
             end,
 
             process_events(State);
@@ -159,11 +164,12 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
             process_events(State);
 
 
-        reset_excitation ->
+        {reset_excitation, Asker} ->
             case VNGType of
                 categorical -> maps:foreach(fun(_Value, VN) -> vn:reset_excitation(VN) end, VNs);
                 numerical -> avb_tree:foreach(fun(_Value, VN) -> vn:reset_excitation(VN) end, VNs)
             end,
+            Asker ! reset_excitation_finished,
             process_events(State);
 
 

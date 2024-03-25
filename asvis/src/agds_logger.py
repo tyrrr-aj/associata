@@ -4,6 +4,7 @@ import rabbitmq
 import threading
 import datetime
 import os
+from pathlib import Path
 
 
 class AgdsLogger:
@@ -19,6 +20,8 @@ class AgdsLogger:
         self._observed_graph = graph.Graph('AGDS')
         self._node_groups = {}
 
+        self._finishing_lock = threading.Lock()
+
         self._channel = rabbitmq.Channel(self._connection, structure_id)
 
 
@@ -30,6 +33,8 @@ class AgdsLogger:
 
 
     def finish(self, timestamp=None):
+        self._finishing_lock.acquire()
+        
         if self._started:
             if timestamp is None:
                 if self._last_known_timestamp is not None:
@@ -38,15 +43,19 @@ class AgdsLogger:
                     timestamp = self._time_origin + 1.0
             self._observed_graph.close_all_time_ranges(timestamp)
             
+            out_dir_name = datetime.datetime.now().strftime("%Y-%m-%d")
+            out_file = f'{datetime.datetime.now().strftime("%H-%M-%S")} agds[{self._structure_id}].gexf'
+            out_file_path = os.path.join(self._out_path, out_dir_name, out_file)
 
-            out_file = f'agds[{self._structure_id}]_{datetime.datetime.now().strftime("%Y-%m-%d#%H_%M_%S")}.gexf'
-            out_file_path = os.path.join(self._out_path, out_file)
+            Path(os.path.join(self._out_path, out_dir_name)).mkdir(parents=True, exist_ok=True)
             self._observed_graph.export(out_file_path)
 
             self._channel.respond(b'"vis_stopped"')
             self._channel.close()
 
             self._started = False
+        
+        self._finishing_lock.release()
 
 
     def on_log_message(self, message):
@@ -75,7 +84,7 @@ class AgdsLogger:
                 }
                 self._observed_graph.add_node(n_id, attributes, timestamp)
 
-                print(f'Node {n_id} created')
+                # print(f'Node {n_id} created')
 
 
             elif event_type == 'connection_formed':

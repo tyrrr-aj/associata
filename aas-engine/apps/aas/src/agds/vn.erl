@@ -3,11 +3,14 @@
         connect_VN/3, 
         connect_ON/2, 
         disconnect_ON/2,
+        disconnect_VN/3,
         update_VNG_range/2, 
         stimulate/6, 
         get_excitation/1, 
         reset_excitation/1,
         get_neighbours/1,
+        get_left_connected_vn/1,
+        get_right_connected_vn/1,
         get_repr_value_and_vng_name/1,
         delete/1]).
 
@@ -33,6 +36,9 @@ connect_ON(ThisVN, ON) -> ThisVN ! {connect_ON, ON}.
 disconnect_ON(ThisVN, ON) -> ThisVN ! {disconnect_ON, ON}.
 
 
+disconnect_VN(ThisVN, DisconnectedVN, ReplacementVN) -> ThisVN ! {disconnect_VN, DisconnectedVN, ReplacementVN}.
+
+
 update_VNG_range(ThisVN, NewVNGRange) -> ThisVN ! {update_VNG_range, NewVNGRange}.
 
 
@@ -47,12 +53,30 @@ get_excitation(ThisVN) ->
     end.
 
 
-reset_excitation(ThisVN) -> ThisVN ! reset_excitation.
+reset_excitation(ThisVN) -> 
+    ThisVN ! {reset_excitation, self()},
+    receive
+        reset_excitation_finished -> ok
+    end.
 
 
 get_neighbours(ThisVN) -> ThisVN ! {get_neighbours, self()},
     receive
         {neighbours, Neighbours} -> Neighbours
+    end.
+
+
+get_left_connected_vn(ThisVN) ->
+    ThisVN ! {get_left_connected_vn, self()},
+    receive
+        {left_connected_vn, LeftConnectedVN} -> LeftConnectedVN
+    end.
+
+
+get_right_connected_vn(ThisVN) ->
+    ThisVN ! {get_right_connected_vn, self()},
+    receive
+        {right_connected_vn, RightConnectedVN} -> RightConnectedVN
     end.
 
 
@@ -113,10 +137,10 @@ process_events(#state{
             NewInferenceDepth = CurrInferenceDepth + 1,
             NewExcitation = LastExcitation + Stimuli,
             
-            case StimulationKind of
-                infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-                {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
-            end,
+            % case StimulationKind of
+            %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
+            %     {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
+            % end,
             
             if 
                 NewInferenceDepth < MaxInferenceDepth ->
@@ -142,7 +166,11 @@ process_events(#state{
                         fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) end, 
                         lists:delete(Source, ConnectedONs)
                     );
-                true -> ok
+                true -> 
+                    case StimulationKind of
+                        infere -> report:node_stimulated(self(), NewExcitation, Reporter);
+                        {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
+                    end
             end,
         
             process_events(State#state{last_excitation=NewExcitation});
@@ -168,7 +196,36 @@ process_events(#state{
 
 
         {disconnect_ON, ON} ->
-            process_events(State#state{connected_ons=lists:delete(ON, ConnectedONs)});
+            NewConnectedONs = lists:delete(ON, ConnectedONs),
+            process_events(State#state{connected_ons=NewConnectedONs});
+            % %%% REMOVING ORHPANED VNs - a good concept, but AVB+ trees do not support deleting...
+            % case NewConnectedONs of
+            %     [] -> 
+            %         report:node_killed(self(), Reporter),
+
+            %         {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
+            %         case LeftConnectedVN of
+            %             none -> ok;
+            %             {VN, _ReprValue} -> vn:disconnect_VN(VN, RightConnectedVN)
+            %         end
+            %         case RightConnectedVN of
+            %             none -> ok;
+            %             {VN, _ReprValue} -> vn:disconnect_VN(VN, LeftConnectedVN)
+            %         end,
+
+            %         vng:remove_killed_vn(VNG, self()),
+            %         killed;
+
+            %     _ -> process_events(State#state{connected_ons=NewConnectedONs})
+            % end;
+
+
+        {disconnect_VN, DisconnectedVN, ReplacementVN} ->
+            NewConnectedVNs = case ConnectedVNs of
+                {{DisconnectedVN, _}, RightConnectedVN} -> {ReplacementVN, RightConnectedVN};
+                {LeftConnectedVN, {DisconnectedVN, _}} -> {LeftConnectedVN, ReplacementVN}
+            end,
+            process_events(State#state{connected_vns=NewConnectedVNs});
 
 
         {update_VNG_range, NewVNGRange} -> 
@@ -180,7 +237,10 @@ process_events(#state{
             process_events(State);
         
 
-        reset_excitation -> process_events(State#state{last_excitation=0.0});
+        {reset_excitation, Asker} -> 
+            report:node_stimulated(self(), 0.0, Reporter),
+            Asker ! reset_excitation_finished,
+            process_events(State#state{last_excitation=0.0});
 
 
         {get_neighbours, Asker} -> 
@@ -193,6 +253,18 @@ process_events(#state{
             end,
             NeighbouringONs = [{on, on:get_index(ON)} || ON <- ConnectedONs],
             Asker ! {neighbours, NeighbouringVNs ++ NeighbouringONs},
+            process_events(State);
+
+
+        {get_left_connected_vn, Asker} ->
+            {LeftConnectedVN, _RightConnectedVN} = ConnectedVNs,
+            Asker ! {left_connected_vn, LeftConnectedVN},
+            process_events(State);
+
+
+        {get_right_connected_vn, Asker} ->
+            {_LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
+            Asker ! {right_connected_vn, RightConnectedVN},
             process_events(State);
 
 

@@ -23,7 +23,7 @@ class Graph:
         self._add_timeframed_attribute_value(node_id, 'poison_lvl', poison_level, timestamp)
 
     def add_node_killing(self, node_id, timestamp):
-        self.graph.nodes[node_id]['killed'] = timestamp
+        self.graph.nodes[node_id]['end'] = timestamp
 
     def add_connection_stimulation(self, connection_stimulation):
         ...
