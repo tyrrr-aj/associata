@@ -85,10 +85,11 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
                     timer:sleep(TimestepMs),
                     [vn:stimulate(VN, self(), Stimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) || VN <- ConnectedVNs, VN /= Source];
                 true -> 
-                    case StimulationKind of
-                        infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-                        {poison, DeadlyDoseRep} -> report:node_poisoned(self(), NewExcitation, DeadlyDoseRep, Reporter)
-                    end
+                    % case StimulationKind of
+                    %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
+                    %     {poison, DeadlyDoseRep} -> report:node_poisoned(self(), NewExcitation, DeadlyDoseRep, Reporter)
+                    % end
+                    ok
             end,
 
             case StimulationKind of
@@ -120,7 +121,7 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
         
 
         {reset_excitation, Asker} -> 
-            report:node_stimulated(self(), 0.0, Reporter),
+            % report:node_stimulated(self(), 0.0, Reporter),
             Asker ! reset_excitation_finished,
             process_events(State#state{last_excitation=0.0});
 

@@ -49,20 +49,29 @@ stimulate(ThisVN, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, Stimul
 get_excitation(ThisVN) -> 
     ThisVN ! {get_excitation, self()},
     receive
-        {last_excitation, Excitation} -> Excitation
+        {last_excitation, Excitation} -> Excitation;
+        {remove_killed_vn, ReprValue, VN} -> 
+            vng:remove_killed_vn(self(), ReprValue, VN),
+            none
     end.
 
 
 reset_excitation(ThisVN) -> 
     ThisVN ! {reset_excitation, self()},
     receive
-        reset_excitation_finished -> ok
+        reset_excitation_finished -> ok;
+        {remove_killed_vn, ReprValue, VN} -> 
+            vng:remove_killed_vn(self(), ReprValue, VN),
+            ok
     end.
 
 
 get_neighbours(ThisVN) -> ThisVN ! {get_neighbours, self()},
     receive
-        {neighbours, Neighbours} -> Neighbours
+        {neighbours, Neighbours} -> Neighbours;
+        {remove_killed_vn, ReprValue, VN} -> 
+            vng:remove_killed_vn(self(), ReprValue, VN),
+            []
     end.
 
 
@@ -123,6 +132,7 @@ init(RepresentedValue, VNGRange, VNG, VNGName, #global_cfg{reporter=Reporter} = 
 
 process_events(#state{
         vn_type=VNType,
+        vng=VNG,
         vng_name=VNGName,
         repr_value=RepresentedValue,
         connected_vns=ConnectedVNs, 
@@ -167,10 +177,11 @@ process_events(#state{
                         lists:delete(Source, ConnectedONs)
                     );
                 true -> 
-                    case StimulationKind of
-                        infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-                        {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
-                    end
+                    % case StimulationKind of
+                    %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
+                    %     {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
+                    % end
+                    ok
             end,
         
             process_events(State#state{last_excitation=NewExcitation});
@@ -197,27 +208,30 @@ process_events(#state{
 
         {disconnect_ON, ON} ->
             NewConnectedONs = lists:delete(ON, ConnectedONs),
-            process_events(State#state{connected_ons=NewConnectedONs});
-            % %%% REMOVING ORHPANED VNs - a good concept, but AVB+ trees do not support deleting...
-            % case NewConnectedONs of
-            %     [] -> 
-            %         report:node_killed(self(), Reporter),
+            
+            case NewConnectedONs of
+                [] -> 
+                    report:node_killed(self(), Reporter),
 
-            %         {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
-            %         case LeftConnectedVN of
-            %             none -> ok;
-            %             {VN, _ReprValue} -> vn:disconnect_VN(VN, RightConnectedVN)
-            %         end
-            %         case RightConnectedVN of
-            %             none -> ok;
-            %             {VN, _ReprValue} -> vn:disconnect_VN(VN, LeftConnectedVN)
-            %         end,
+                    case VNType of
+                        categorical -> ok;
+                        numeric ->
+                            {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
+                            case LeftConnectedVN of
+                                none -> ok;
+                                {LeftVN, _LeftReprValue} -> vn:disconnect_VN(LeftVN, self(), RightConnectedVN)
+                            end,
+                            case RightConnectedVN of
+                                none -> ok;
+                                {RightVN, _RightReprValue} -> vn:disconnect_VN(RightVN, self(), LeftConnectedVN)
+                            end
+                    end,
 
-            %         vng:remove_killed_vn(VNG, self()),
-            %         killed;
+                    vng:remove_killed_vn(VNG, RepresentedValue, self()),
+                    killed;
 
-            %     _ -> process_events(State#state{connected_ons=NewConnectedONs})
-            % end;
+                _ -> process_events(State#state{connected_ons=NewConnectedONs})
+            end;
 
 
         {disconnect_VN, DisconnectedVN, ReplacementVN} ->
@@ -238,7 +252,7 @@ process_events(#state{
         
 
         {reset_excitation, Asker} -> 
-            report:node_stimulated(self(), 0.0, Reporter),
+            % report:node_stimulated(self(), 0.0, Reporter),
             Asker ! reset_excitation_finished,
             process_events(State#state{last_excitation=0.0});
 

@@ -1,9 +1,7 @@
 -module(avb_tree).
--export([create/1, add/3, get/2, get_neighbours/2, get_nearest/2, get_min/1, get_max/1, foreach/2, items/1]).
+-export([create/1, add/3, delete/2, get/2, get_neighbours/2, get_nearest/2, get_min/1, get_max/1, foreach/2, items/1]).
 
--record(tree, {root, epsilon}).
-
-
+-include("avb_tree.hrl").
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
 
@@ -22,6 +20,13 @@ add(#tree{root=Root, epsilon=Epsilon} = Tree, NewKey, NewValueConstructor) ->
         {split, PassedLeftSubtree, PassedContent, PassedRightSubtree, InsertedValue} -> 
             NewRoot = {PassedLeftSubtree, PassedContent, PassedRightSubtree, no_content, no_node},
             {Tree#tree{root=NewRoot}, InsertedValue}
+    end.
+
+
+delete(#tree{root=Root, epsilon=Epsilon} = Tree, DeletedKey) ->
+    case delete(Root, DeletedKey, Epsilon) of
+        {rebuild, Items} -> Tree#tree{root=rebuild(Items, Epsilon)};
+        {no_action_required, NewRoot} -> Tree#tree{root=NewRoot}
     end.
 
 
@@ -156,6 +161,78 @@ insert_down({LeftChild, LeftContent, MiddleChild, {RightKey, _RightValue, _Right
             }
     end.
 
+
+%% leaves
+
+delete(no_node, _DeletedKey, _Epsilon) -> {no_action_required, no_node};
+
+delete({no_node, {LeftKey, _LeftValue, _LeftOccurances}, no_node, no_content, no_node}, DeletedKey, Epsilon) when abs(DeletedKey - LeftKey) < Epsilon -> 
+    {rebuild, []};
+
+delete({no_node, LeftContent, no_node, {RightKey, _RightValue, _RightOccurances}, no_node}, DeletedKey, Epsilon) when abs(DeletedKey - RightKey) < Epsilon ->
+    {no_action_required, {no_node, LeftContent, no_node, no_content, no_node}};
+
+delete({no_node, _LeftContent, no_node, _RightContent, no_node} = Node, _DeletedKey, _Epsilon) ->
+    {no_action_required, Node};
+
+
+%% middle nodes
+
+delete({LeftChild, {LeftKey, _LeftValue, _LeftOccurances}, MiddleChild, RightContent, RightChild}, DeletedKey, Epsilon) when abs(DeletedKey - LeftKey) < Epsilon ->
+    Items = items_impl(LeftChild) ++ items_impl(MiddleChild) ++ item_if_content_present(RightContent) ++ items_impl(RightChild),
+    LocalRoot = rebuild(Items, Epsilon),
+    {no_action_required, LocalRoot};
+
+delete({LeftChild, LeftContent, MiddleChild, {RightKey, _RightValue, _RightOccurances}, RightChild}, DeletedKey, Epsilon) when abs(DeletedKey - RightKey) < Epsilon ->
+    Items = items_impl(LeftChild) ++ [LeftContent] ++ items_impl(MiddleChild) ++ items_impl(RightChild),
+    LocalRoot = rebuild(Items, Epsilon),
+    {no_action_required, LocalRoot};
+
+delete({LeftChild, {LeftKey, _LeftValue, _LeftOccurances} = LeftContent, MiddleChild, RightContent, RightChild}, DeletedKey, Epsilon) when DeletedKey < LeftKey ->
+    case delete(LeftChild, DeletedKey, Epsilon) of
+        {rebuild, ItemsFromLeftChild} -> 
+            Items = ItemsFromLeftChild ++ [LeftContent] ++ items_impl(MiddleChild) ++ item_if_content_present(RightContent) ++ items_impl(RightChild),
+            LocalRoot = rebuild(Items, Epsilon),
+            {no_action_required, LocalRoot};
+        {no_action_required, NewLeftChild} -> 
+            {no_action_required, {NewLeftChild, LeftContent, MiddleChild, RightContent, RightChild}}
+    end;
+
+delete({LeftChild, {LeftKey, _LeftValue, _LeftOccurances} = LeftContent, MiddleChild, no_content, no_node}, DeletedKey, Epsilon) when DeletedKey > LeftKey ->
+    case delete(MiddleChild, DeletedKey, Epsilon) of
+        {rebuild, ItemsFromMiddleChild} -> 
+            Items = items_impl(LeftChild) ++ [LeftContent] ++ ItemsFromMiddleChild,
+            LocalRoot = rebuild(Items, Epsilon),
+            {no_action_required, LocalRoot};
+        {no_action_required, NewMiddleChild} -> 
+            {no_action_required, {LeftChild, {LeftKey, _LeftValue, _LeftOccurances}, NewMiddleChild, no_content, no_node}}
+    end;
+
+delete({LeftChild, LeftContent, MiddleChild, {RightKey, _RightValue, _RightOccurances} = RightContent, RightChild}, DeletedKey, Epsilon) when DeletedKey < RightKey ->
+    case delete(MiddleChild, DeletedKey, Epsilon) of
+        {rebuild, ItemsFromMiddleChild} -> 
+            Items = items_impl(LeftChild) ++ [LeftContent] ++ ItemsFromMiddleChild ++ [RightContent] ++ items_impl(RightChild),
+            LocalRoot = rebuild(Items, Epsilon),
+            {no_action_required, LocalRoot};
+        {no_action_required, NewMiddleChild} -> 
+            {no_action_required, {LeftChild, LeftContent, NewMiddleChild, RightContent, RightChild}}
+    end;
+
+delete({LeftChild, LeftContent, MiddleChild, {RightKey, _RightValue, _RightOccurances} = RightContent, RightChild}, DeletedKey, Epsilon) when DeletedKey > RightKey ->
+    case delete(RightChild, DeletedKey, Epsilon) of
+        {rebuild, ItemsFromRightChild} -> 
+            Items = items_impl(LeftChild) ++ [LeftContent] ++ items_impl(MiddleChild) ++ [RightContent] ++ ItemsFromRightChild,
+            LocalRoot = rebuild(Items, Epsilon),
+            {no_action_required, LocalRoot};
+        {no_action_required, NewRightChild} -> 
+            {no_action_required, {LeftChild, LeftContent, MiddleChild, {RightKey, _RightValue, _RightOccurances}, NewRightChild}}
+    end.
+
+
+
+rebuild(Items, Epsilon) ->
+    #tree{root=LocalRoot} = add_range(create(Epsilon), items_to_key_value_list(Items)),
+    LocalRoot.
 
 
 get_content(no_node, _SearchedKey, _Epsilon) -> no_content;
@@ -420,3 +497,11 @@ items_impl({LeftChild, LeftContent, MiddleChild, RightContent, RightChild}) ->
 item_if_content_present(no_content) -> [];
 
 item_if_content_present(Content) -> [Content].
+
+
+
+items_to_key_value_list(Items) -> lists:flatten([lists:duplicate(Occurances, {Key, Value}) || {Key, Value, Occurances} <- Items]).
+
+
+add_range(Tree, Items) ->
+    lists:foldl(fun(AccTree, {Key, Value}) -> {NewTree, _NewValue} = add(AccTree, Key, fun() -> Value end), NewTree end, Tree, Items).

@@ -1,7 +1,9 @@
 -module(vng).
 -export([create_numerical_VNG/3, create_categorical_VNG/2, add_value/3, stimulate/5, reset_excitation/1, get_excitation/1, get_neighbours/2, delete/1]).
+-export([remove_killed_vn/3]).
 
 -include("config.hrl").
+-include("../generic/avb_tree.hrl").
 
 -record(state, {vng_type, vng_name, vns, min_value, max_value, all_vns_set, global_cfg}).
 
@@ -43,6 +45,9 @@ get_neighbours(VNG, Value) ->
     receive
         {neighbours, Neighbours} -> Neighbours
     end.
+
+
+remove_killed_vn(VNG, RemovedValue, RemovedVN) -> VNG ! {remove_killed_vn, RemovedValue, RemovedVN}.
 
 
 delete(VNG) -> VNG ! delete.
@@ -155,11 +160,12 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
 
 
         {get_excitation, Caller} ->
-            VNsExcitation = case VNGType of
+            VNsResponses = case VNGType of
                 categorical -> [{ReprValue, vn:get_excitation(VN)} || {ReprValue, VN} <- maps:to_list(VNs)];
                 numerical -> [{ReprValue, vn:get_excitation(VN)} || {ReprValue, VN, _Occurances} <- avb_tree:items(VNs)]
             end,
 
+            VNsExcitation = lists:filter(fun({_ReprValue, Exc}) -> Exc /= none end, VNsResponses),
             Caller ! {vns_excitation, VNsExcitation},
             process_events(State);
 
@@ -195,6 +201,20 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
 
             Asker ! {neighbours, Neighbours},
             process_events(State);
+
+
+        {remove_killed_vn, RemovedValue, RemovedVN} ->
+            NewVNs = case VNGType of
+                categorical ->
+                    maps:remove(RemovedValue, VNs);
+
+                numerical ->
+                    RemainingVNs = lists:flatten([lists:duplicate(Occurances, {VN, ReprValue}) || {ReprValue, VN, Occurances} <- avb_tree:items(VNs), abs(ReprValue - RemovedValue) >= VNs#tree.epsilon]),
+                    lists:foldl(fun({VN, ReprValue}, AVBTree) -> {NewTree, {_, VN}} = avb_tree:add(AVBTree, ReprValue, fun () -> VN end), NewTree end, avb_tree:create(VNs#tree.epsilon), RemainingVNs)
+            end,
+
+            NewAllVNsSet = sets:del_element(RemovedVN, AllVNsSet),
+            process_events(State#state{vns=NewVNs, all_vns_set=NewAllVNsSet});
 
 
         delete ->
