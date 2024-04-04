@@ -236,8 +236,16 @@ process_events(#state{
 
         {disconnect_VN, DisconnectedVN, ReplacementVN} ->
             NewConnectedVNs = case ConnectedVNs of
-                {{DisconnectedVN, _}, RightConnectedVN} -> {ReplacementVN, RightConnectedVN};
-                {LeftConnectedVN, {DisconnectedVN, _}} -> {LeftConnectedVN, ReplacementVN}
+                {{DisconnectedVN, _} = OldLeftConnectedVN, RightConnectedVN} -> 
+                    report_breaking_connection(OldLeftConnectedVN, ReplacementVN, GlobalCfg),
+                    % I<3Ola; Nokia: connecting_people; I<3Ola
+                    
+                    {ReplacementVN, RightConnectedVN};
+                
+                {LeftConnectedVN, {DisconnectedVN, _} = OldRightConnectedVN} -> 
+                    report_breaking_connection(OldLeftConnectedVN, ReplacementVN, GlobalCfg),
+
+                    {LeftConnectedVN, ReplacementVN}
             end,
             process_events(State#state{connected_vns=NewConnectedVNs});
 
