@@ -3,7 +3,7 @@
 
 -include("config.hrl").
 
--record(state, {self_index, ong, connected_vns, last_excitation, global_cfg}).
+-record(state, {self_index, ong, connected_vns, last_excitation, curr_poison_lvl, global_cfg}).
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
@@ -66,15 +66,15 @@ delete(ON) -> ON ! delete.
 
 init(ONG, ONIndex, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), on, ONIndex, ONG, Reporter),
-    process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=[], last_excitation=0.0, global_cfg=GlobalCfg}).
+    process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=[], last_excitation=0.0, curr_poison_lvl=0.0, global_cfg=GlobalCfg}).
 
 
-process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, last_excitation=LastExcitation, global_cfg=#global_cfg{reporter=Reporter, timestep_ms=TimestepMs}} = State) -> 
+process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, last_excitation=LastExcitation, curr_poison_lvl=CurrPoisonLvl, global_cfg=#global_cfg{reporter=Reporter, timestep_ms=TimestepMs}} = State) -> 
     receive
         {stimulate, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, StimulationKind} ->
             NewInferenceDepth = CurrInferenceDepth + 1,
-            NewExcitation = LastExcitation + Stimuli,
 
+            % NEEDS TO BE MOVED - NewExcitation no longer available here
             % case StimulationKind of
             %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
             %     {poison, DeadlyDoseRep} -> report:node_poisoned(self(), NewExcitation, DeadlyDoseRep, Reporter)
@@ -85,6 +85,7 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
                     timer:sleep(TimestepMs),
                     [vn:stimulate(VN, self(), Stimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) || VN <- ConnectedVNs, VN /= Source];
                 true -> 
+                    % NEEDS TO BE MOVED - NewExcitation no longer available here
                     % case StimulationKind of
                     %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
                     %     {poison, DeadlyDoseRep} -> report:node_poisoned(self(), NewExcitation, DeadlyDoseRep, Reporter)
@@ -93,16 +94,19 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
             end,
 
             case StimulationKind of
-                infere -> process_events(State#state{last_excitation=NewExcitation});
+                infere -> 
+                    NewExcitation = LastExcitation + Stimuli,
+                    process_events(State#state{last_excitation=NewExcitation});
                 {poison, DeadlyDose} -> 
+                    NewPoisonLvl = CurrPoisonLvl + Stimuli,
                     if 
-                        NewExcitation >= DeadlyDose -> 
+                        NewPoisonLvl >= DeadlyDose -> 
                             report:node_killed(self(), Reporter),
                             [vn:disconnect_ON(VN, self()) || VN <- ConnectedVNs],
                             ong:remove_killed_ON(ONG, ONIndex);
                             killed;
                         true -> 
-                            process_events(State#state{last_excitation=NewExcitation})
+                            process_events(State#state{curr_poison_lvl=NewPoisonLvl})
                     end
             end;
 
