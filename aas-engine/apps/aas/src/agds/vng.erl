@@ -1,11 +1,11 @@
 -module(vng).
 -export([create_numerical_VNG/3, create_categorical_VNG/2, add_value/3, stimulate/5, reset_excitation/1, get_excitation/1, get_neighbours/2, delete/1]).
--export([remove_killed_vn/3]).
+-export([remove_killed_vn/3, notify_VNG_to_ON_conn_count_incremented/1, notify_VNG_to_ON_conn_count_decremented/1]).
 
 -include("config.hrl").
 -include("../generic/avb_tree.hrl").
 
--record(state, {vng_type, vng_name, vns, min_value, max_value, all_vns_set, global_cfg}).
+-record(state, {vng_type, vng_name, vns, min_value, max_value, all_vns_set, vng_to_on_conn_count, global_cfg}).
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
@@ -50,6 +50,11 @@ get_neighbours(VNG, Value) ->
 remove_killed_vn(VNG, RemovedValue, RemovedVN) -> VNG ! {remove_killed_vn, RemovedValue, RemovedVN}.
 
 
+notify_VNG_to_ON_conn_count_incremented(VNG) -> VNG ! {notify_VNG_to_ON_conn_count_incremented}.
+
+notify_VNG_to_ON_conn_count_decremented(VNG) -> VNG ! {notify_VNG_to_ON_conn_count_decremented}.
+
+
 delete(VNG) -> VNG ! delete.
 
 
@@ -57,11 +62,11 @@ delete(VNG) -> VNG ! delete.
 
 init(categorical, VNGName, no_epsilon, GlobalCfg) ->
     report_vng_creation(categorical, VNGName, GlobalCfg),
-    process_events(#state{vng_type=categorical, vng_name=VNGName, vns=#{}, min_value=na, max_value=na, all_vns_set=sets:new(), global_cfg=GlobalCfg});
+    process_events(#state{vng_type=categorical, vng_name=VNGName, vns=#{}, min_value=na, max_value=na, all_vns_set=sets:new(), vng_to_on_conn_count=0, global_cfg=GlobalCfg});
 
 init(numerical, VNGName, Epsilon, GlobalCfg) ->
     report_vng_creation(numerical, VNGName, GlobalCfg),
-    process_events(#state{vng_type=numerical, vng_name=VNGName, vns=avb_tree:create(Epsilon), min_value=none, max_value=none, all_vns_set=sets:new(), global_cfg=GlobalCfg}).
+    process_events(#state{vng_type=numerical, vng_name=VNGName, vns=avb_tree:create(Epsilon), min_value=none, max_value=none, all_vns_set=sets:new(), vng_to_on_conn_count=0, global_cfg=GlobalCfg}).
 
 
 report_vng_creation(VNGType, VNGName, #global_cfg{reporter=Reporter}) ->
@@ -69,7 +74,7 @@ report_vng_creation(VNGType, VNGName, #global_cfg{reporter=Reporter}) ->
 
 
 % Separate AllVNsSet is stored to quicken sending messages to all VNs within VNG (could be replaced with pg:)
-process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=MinValue, max_value=MaxValue, all_vns_set=AllVNsSet, global_cfg=#global_cfg{reporter=Reporter} = GlobalCfg} = State) ->
+process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=MinValue, max_value=MaxValue, all_vns_set=AllVNsSet, vng_to_on_conn_count=VNGtoONConnCount, global_cfg=#global_cfg{reporter=Reporter} = GlobalCfg} = State) ->
     receive
         {add_value, AddedValue, RespectiveON} ->
             case VNGType of
@@ -77,7 +82,7 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
                     case maps:find(AddedValue, VNs) of
                         {ok, VN} -> NewVNs = VNs;
                         error -> 
-                            VN = vn:create_VN(AddedValue, categorical, VNGName, self(), GlobalCfg),
+                            VN = vn:create_VN(AddedValue, categorical, VNGName, self(), VNGtoONConnCount, GlobalCfg),
                             NewVNs = VNs#{AddedValue => VN}
                     end,
 
@@ -91,7 +96,7 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
                         true -> NewMinValue = MinValue, NewMaxValue = MaxValue
                     end,
 
-                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(AddedValue, vng_range(NewMinValue, NewMaxValue), VNGName, self(), GlobalCfg) end),
+                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(AddedValue, vng_range(NewMinValue, NewMaxValue), VNGName, self(), VNGtoONConnCount, GlobalCfg) end),
                         
                     case IsNew of
                         new_value ->
@@ -121,7 +126,10 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
 
             NewAllVNsSet = sets:add_element(VN, AllVNsSet),
 
-            process_events(State#state{vns=NewVNs, min_value=NewMinValue, max_value=NewMaxValue, all_vns_set=NewAllVNsSet});
+            NewVNGtoONConnCount = VNGtoONConnCount + 1,
+            update_VNG_to_ON_conn_count(NewAllVNsSet, NewVNGtoONConnCount),
+
+            process_events(State#state{vns=NewVNs, min_value=NewMinValue, max_value=NewMaxValue, all_vns_set=NewAllVNsSet, vng_to_on_conn_count=NewVNGtoONConnCount});
 
 
         {stimulate, all, repr_value, MaxDepth, StimulationKind} ->
@@ -217,6 +225,18 @@ process_events(#state{vng_type=VNGType, vng_name=VNGName, vns=VNs, min_value=Min
             process_events(State#state{vns=NewVNs, all_vns_set=NewAllVNsSet});
 
 
+        {notify_VNG_to_ON_conn_count_incremented} ->
+            NewVNGtoONConnCount = VNGtoONConnCount + 1,
+            update_VNG_to_ON_conn_count(AllVNsSet, NewVNGtoONConnCount),
+            process_events(State#state{vng_to_on_conn_count=NewVNGtoONConnCount});
+
+
+        {notify_VNG_to_ON_conn_count_decremented} ->
+            NewVNGtoONConnCount = VNGtoONConnCount - 1,
+            update_VNG_to_ON_conn_count(AllVNsSet, NewVNGtoONConnCount),
+            process_events(State#state{vng_to_on_conn_count=VNGtoONConnCount - 1});
+
+
         delete ->
             case VNGType of
                 categorical -> maps:foreach(fun(_Value, VN) -> vn:delete(VN) end, VNs);
@@ -235,6 +255,10 @@ vng_range(MinValue, MaxValue) -> MaxValue - MinValue.
 
 update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue) ->
     lists:foreach(fun(VN) -> vn:update_VNG_range(VN, vng_range(NewMinValue, NewMaxValue)) end, sets:to_list(AllVNsSet)).
+
+
+update_VNG_to_ON_conn_count(AllVNsSet, NewVNGtoONConnCount) ->
+    lists:foreach(fun(VN) -> vn:update_VNG_to_ON_conn_count(VN, NewVNGtoONConnCount) end, sets:to_list(AllVNsSet)).
 
 
 get_nearby_VN_stimuli(ExactValue, VNReprValue, VNGRange, Stimulation) ->  Stimulation * (1 - abs(ExactValue - VNReprValue) / VNGRange).

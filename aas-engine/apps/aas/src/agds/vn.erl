@@ -1,10 +1,11 @@
 -module(vn).
--export([create_VN/5, 
+-export([create_VN/6, 
         connect_VN/3, 
         connect_ON/2, 
         disconnect_ON/2,
         disconnect_VN/3,
         update_VNG_range/2, 
+        update_VNG_to_ON_conn_count/2,
         stimulate/6, 
         get_excitation/1, 
         reset_excitation/1,
@@ -16,15 +17,17 @@
 
 -include("config.hrl").
 
--record(state, {vn_type, vng, vng_name, repr_value, connected_vns, connected_ons, last_excitation, vng_range, global_cfg}).
+-record(state, {vn_type, vng, vng_name, vng_to_on_conn_count, repr_value, connected_vns, connected_ons, last_excitation, vng_range, global_cfg}).
 
 
 
-%% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
+%% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%% 
 
-create_VN(RepresentedValue, categorical, VNGName, VNG, GlobalCfg) -> spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, GlobalCfg) end);
+create_VN(RepresentedValue, categorical, VNGName, VNG, VNGtoONConnCount, GlobalCfg) -> 
+    spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, VNGtoONConnCount, GlobalCfg) end);
 
-create_VN(RepresentedValue, VNGRange, VNGName, VNG, GlobalCfg) -> spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, GlobalCfg) end).
+create_VN(RepresentedValue, VNGRange, VNGName, VNG, VNGtoONConnCount, GlobalCfg) -> 
+    spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, VNGtoONConnCount, GlobalCfg) end).
 
 
 connect_VN(ThisVN, ConnectedVN, ConnectedVNValue) -> ThisVN ! {connect_VN, ConnectedVN, ConnectedVNValue}.
@@ -40,6 +43,9 @@ disconnect_VN(ThisVN, DisconnectedVN, ReplacementVN) -> ThisVN ! {disconnect_VN,
 
 
 update_VNG_range(ThisVN, NewVNGRange) -> ThisVN ! {update_VNG_range, NewVNGRange}.
+
+
+update_VNG_to_ON_conn_count(ThisVN, NewVNGtoONConnCount) -> ThisVN ! {update_VNG_to_ON_conn_count, NewVNGtoONConnCount}.
 
 
 stimulate(ThisVN, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, StimulationKind) -> 
@@ -100,12 +106,13 @@ delete(ThisVN) -> ThisVN ! delete.
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(RepresentedValue, categorical, VNG, VNGName, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(RepresentedValue, categorical, VNG, VNGName, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
         vn_type=categorical, 
         vng=VNG, 
         vng_name=VNGName, 
+        vng_to_on_conn_count=VNGtoONConnCount,
         repr_value=RepresentedValue, 
         connected_vns=na, 
         connected_ons=[], 
@@ -114,12 +121,13 @@ init(RepresentedValue, categorical, VNG, VNGName, #global_cfg{reporter=Reporter}
         global_cfg=GlobalCfg
     });
 
-init(RepresentedValue, VNGRange, VNG, VNGName, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(RepresentedValue, VNGRange, VNG, VNGName, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
         vn_type=numeric, 
         vng=VNG, 
         vng_name=VNGName, 
+        vng_to_on_conn_count=VNGtoONConnCount,
         repr_value=RepresentedValue, 
         connected_vns={none, none}, 
         connected_ons=[], 
@@ -134,6 +142,7 @@ process_events(#state{
         vn_type=VNType,
         vng=VNG,
         vng_name=VNGName,
+        vng_to_on_conn_count=VNGtoONConnCount,
         repr_value=RepresentedValue,
         connected_vns=ConnectedVNs, 
         connected_ons=ConnectedONs, 
@@ -167,10 +176,7 @@ process_events(#state{
                             )
                     end,
 
-                    ONStimuli = case length(ConnectedONs) > 0 of
-                        true ->  Stimuli / length(ConnectedONs);
-                        false -> 0.0
-                    end,
+                    ONStimuli = Stimuli * weight_vn_to_on(ConnectedONs, VNGtoONConnCount),
                     
                     lists:foreach(
                         fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) end, 
@@ -208,6 +214,7 @@ process_events(#state{
 
         {disconnect_ON, ON} ->
             NewConnectedONs = lists:delete(ON, ConnectedONs),
+            vng:notify_VNG_to_ON_conn_count_decremented(VNG),
             
             case NewConnectedONs of
                 [] -> 
@@ -234,24 +241,28 @@ process_events(#state{
             end;
 
 
-        {disconnect_VN, DisconnectedVN, ReplacementVN} ->
+        {disconnect_VN, DisconnectedVN, {ReplVN, _ReplVNValue} = ReplacementVN} ->
             NewConnectedVNs = case ConnectedVNs of
                 {{DisconnectedVN, _} = OldLeftConnectedVN, RightConnectedVN} -> 
                     report_breaking_connection(OldLeftConnectedVN, ReplacementVN, GlobalCfg),
                     % I<3Ola; Nokia: connecting_people; I<3Ola
-                    
                     {ReplacementVN, RightConnectedVN};
                 
                 {LeftConnectedVN, {DisconnectedVN, _} = OldRightConnectedVN} -> 
-                    report_breaking_connection(OldLeftConnectedVN, ReplacementVN, GlobalCfg),
-
+                    report_breaking_connection(OldRightConnectedVN, ReplacementVN, GlobalCfg),
                     {LeftConnectedVN, ReplacementVN}
             end,
+
+            report:connection_formed(self(), ReplVN, Reporter),
             process_events(State#state{connected_vns=NewConnectedVNs});
 
 
         {update_VNG_range, NewVNGRange} -> 
             process_events(State#state{vng_range=NewVNGRange});
+
+
+        {update_VNG_to_ON_conn_count, NewVNGtoONConnCount} ->
+            process_events(State#state{vng_to_on_conn_count=NewVNGtoONConnCount});
 
 
         {get_excitation, Asker} -> 
@@ -306,6 +317,16 @@ stimulate_neigh_vn({TargetVN, TargetVNReprValue}, OwnReprValue, ReceivedStimuli,
     StimuliToPass = ReceivedStimuli * (VNGRange - abs(OwnReprValue - TargetVNReprValue)) / VNGRange,
     vn:stimulate(TargetVN, self(), StimuliToPass, NewInferenceDepth, MaxInferenceDepth, StimulationKind).
 
+
+weight_vn_to_on(ConnectedONs, VNGtoONConnCount) ->
+    %% CLASSICAL WEIGHT
+    % case length(ConnectedONs) > 0 of
+    %     true ->  1 / length(ConnectedONs);
+    %     false -> 0.0
+    % end.
+    
+    %% MODIFIED WEIGHT
+    (VNGtoONConnCount - length(ConnectedONs)) / VNGtoONConnCount.
 
 
 report_breaking_connection(none, _NewConnectedVN, _GlobalCfg) -> ok;
