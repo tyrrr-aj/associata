@@ -77,6 +77,12 @@ class AgdsLogger:
                 info_format = '{{{},{},{},{}}}'
                 [n_id, n_type, n_value, n_group] = parse.parse(info_format, event_info)
                 
+                try:
+                    float_value = float(n_value)
+                    n_value = round(float_value, 3)
+                except:
+                    pass
+
                 attributes = {
                     'type': n_type, 
                     'node_group': self._node_groups[n_group],
@@ -91,13 +97,15 @@ class AgdsLogger:
                 info_format = '{{{},{}}}'
                 [source_node_id, dest_node_id] = parse.parse(info_format, event_info)
                 
+                # print(f'Connection formed: {source_node_id} <-> {dest_node_id}')
                 self._observed_graph.add_connection(source_node_id, dest_node_id, timestamp)
 
 
             elif event_type == 'connection_broken':
                 info_format = '{{{},{}}}'
                 [source_node_id, dest_node_id] = parse.parse(info_format, event_info)
-                
+
+                # print(f'Connection broken: {source_node_id} <-> {dest_node_id}')                
                 self._observed_graph.remove_connection(source_node_id, dest_node_id, timestamp)
 
 
