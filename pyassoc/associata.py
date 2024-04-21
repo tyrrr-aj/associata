@@ -4,6 +4,7 @@ import subprocess
 import atexit
 import uuid
 import parse
+import os
 
 
 
@@ -130,11 +131,11 @@ class AGDS(AAS):
         
         self._query_response = None
 
-    def add_numerical_vng(self, name, epsilon):
-        self._channel.send_backend(f'{{add_vng,"{name}",numerical,{epsilon}}}.')
+    def add_numerical_vng(self, name, epsilon, is_action=False):
+        self._channel.send_backend(f'{{add_vng,"{name}",numerical,{epsilon},{"true" if is_action else "false"}}}.')
 
-    def add_categorical_vng(self, name):
-        self._channel.send_backend(f'{{add_vng,"{name}",categorical}}.')
+    def add_categorical_vng(self, name, is_action=False):
+        self._channel.send_backend(f'{{add_vng,"{name}",categorical,{"true" if is_action else "false"}}}.')
 
     def add_observation(self, vng_values):
         add_observation_cmd = f'{{add_observation,{self._dict_to_erl_map_repr(vng_values)}}}.'
@@ -147,10 +148,10 @@ class AGDS(AAS):
         self._channel.send_backend(f'{{infere,{inference_setup.get_formatted_entries()},{max_depth}}}.')
         self._channel.receive_backend(self._inference_timeout_sec, lambda message: message == b'"inference_finished"')
 
-    def poison(self, inference_setup, max_depth, deadly_dose):
+    def poison(self, inference_setup, max_depth, deadly_dose, min_acc_dose):
         self.reset_excitation()
         self._stimulated = True
-        self._channel.send_backend(f'{{poison,{inference_setup.get_formatted_entries()},{max_depth},{deadly_dose}}}.')
+        self._channel.send_backend(f'{{poison,{inference_setup.get_formatted_entries()},{max_depth},{deadly_dose},{min_acc_dose}}}.')
         self._channel.receive_backend(self._poisoning_timeout_sec, lambda message: message == b'"poisoning_finished"')
 
     def reset_excitation(self):

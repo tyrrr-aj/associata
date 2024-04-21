@@ -1,5 +1,5 @@
 -module(vn).
--export([create_VN/6, 
+-export([create_VN/7, 
         connect_VN/3, 
         connect_ON/2, 
         disconnect_ON/2,
@@ -17,17 +17,17 @@
 
 -include("config.hrl").
 
--record(state, {vn_type, vng, vng_name, vng_to_on_conn_count, repr_value, connected_vns, connected_ons, last_excitation, vng_range, global_cfg}).
+-record(state, {vn_type, vng, vng_name, vng_is_action, vng_to_on_conn_count, repr_value, connected_vns, connected_ons, last_excitation, vng_range, global_cfg}).
 
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%% 
 
-create_VN(RepresentedValue, categorical, VNGName, VNG, VNGtoONConnCount, GlobalCfg) -> 
-    spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, VNGtoONConnCount, GlobalCfg) end);
+create_VN(RepresentedValue, categorical, VNGName, VNGIsAction, VNG, VNGtoONConnCount, GlobalCfg) -> 
+    spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, GlobalCfg) end);
 
-create_VN(RepresentedValue, VNGRange, VNGName, VNG, VNGtoONConnCount, GlobalCfg) -> 
-    spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, VNGtoONConnCount, GlobalCfg) end).
+create_VN(RepresentedValue, VNGRange, VNGName, VNGIsAction, VNG, VNGtoONConnCount, GlobalCfg) -> 
+    spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, GlobalCfg) end).
 
 
 connect_VN(ThisVN, ConnectedVN, ConnectedVNValue) -> ThisVN ! {connect_VN, ConnectedVN, ConnectedVNValue}.
@@ -106,12 +106,13 @@ delete(ThisVN) -> ThisVN ! delete.
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(RepresentedValue, categorical, VNG, VNGName, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
         vn_type=categorical, 
         vng=VNG, 
         vng_name=VNGName, 
+        vng_is_action=VNGIsAction,
         vng_to_on_conn_count=VNGtoONConnCount,
         repr_value=RepresentedValue, 
         connected_vns=na, 
@@ -121,12 +122,13 @@ init(RepresentedValue, categorical, VNG, VNGName, VNGtoONConnCount, #global_cfg{
         global_cfg=GlobalCfg
     });
 
-init(RepresentedValue, VNGRange, VNG, VNGName, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
         vn_type=numeric, 
         vng=VNG, 
         vng_name=VNGName, 
+        vng_is_action=VNGIsAction,
         vng_to_on_conn_count=VNGtoONConnCount,
         repr_value=RepresentedValue, 
         connected_vns={none, none}, 
@@ -142,6 +144,7 @@ process_events(#state{
         vn_type=VNType,
         vng=VNG,
         vng_name=VNGName,
+        vng_is_action=VNGIsAction,
         vng_to_on_conn_count=VNGtoONConnCount,
         repr_value=RepresentedValue,
         connected_vns=ConnectedVNs, 
@@ -179,7 +182,7 @@ process_events(#state{
                     ONStimuli = Stimuli * weight_vn_to_on(ConnectedONs, VNGtoONConnCount),
                     
                     lists:foreach(
-                        fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) end, 
+                        fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind, VNGIsAction) end, 
                         lists:delete(Source, ConnectedONs)
                     );
                 true -> 
@@ -326,7 +329,10 @@ weight_vn_to_on(ConnectedONs, VNGtoONConnCount) ->
     % end.
     
     %% MODIFIED WEIGHT
-    (VNGtoONConnCount - length(ConnectedONs)) / VNGtoONConnCount.
+    if 
+        VNGtoONConnCount == length(ConnectedONs) -> 1.0;
+        true -> (VNGtoONConnCount - length(ConnectedONs)) / VNGtoONConnCount
+    end.
 
 
 report_breaking_connection(none, _NewConnectedVN, _GlobalCfg) -> ok;

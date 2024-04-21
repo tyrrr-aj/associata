@@ -6,7 +6,7 @@
         connection_formed/3, 
         connection_broken/3,
         node_stimulated/3, 
-        node_poisoned/4,
+        node_poisoned/7,
         node_killed/2,
         stimuli_propagated/4,
         experiment_end/1,
@@ -37,7 +37,8 @@ connection_broken(SourceNodeId, DestNodeId, Reporter) -> report_timestamped(conn
 node_stimulated(NodeId, NewExcitation, Reporter) -> report_timestamped(node_stimulated, {NodeId, NewExcitation}, Reporter).
 
 
-node_poisoned(NodeId, NewExcitation, DeadlyDose, Reporter) -> report_timestamped(node_poisoned, {NodeId, NewExcitation, DeadlyDose}, Reporter).
+node_poisoned(NodeId, NewAccPoisonLvl, NewTmpPoisonLvl, NewTmpPoisonMultiplier, Source, Stimuli, Reporter) -> 
+    report_timestamped(node_poisoned, {NodeId, NewAccPoisonLvl, NewTmpPoisonLvl, NewTmpPoisonMultiplier, Source, Stimuli}, Reporter).
 
 node_killed(NodeId, Reporter) -> report_timestamped(node_killed, {NodeId}, Reporter).
 

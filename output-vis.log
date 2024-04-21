@@ -1,0 +1,6 @@
+
+(c:\Users\adams\Doktorat\aasociata\pyassoc\.conda) C:\Users\adams\Doktorat\aasociata>cd C:\Users\adams\Doktorat\aasociata\asvis\ 
+
+(c:\Users\adams\Doktorat\aasociata\pyassoc\.conda) C:\Users\adams\Doktorat\aasociata\asvis>pipenv run python src\asvis.py C:\Users\adams\Doktorat\aasociata\pyassoc\experiments 
+'pipenv' is not recognized as an internal or external command,
+operable program or batch file.

@@ -117,10 +117,10 @@ class AgdsLogger:
 
 
             elif event_type == 'node_poisoned':
-                info_format = '{{{},{},{}}}'
-                [node_id, poison_lvl, _deadly_dose] = parse.parse(info_format, event_info)
+                info_format = '{{{},{},{},{},{},{}}}'
+                [node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli] = parse.parse(info_format, event_info)
                 
-                self._observed_graph.add_node_poisoning(node_id, poison_lvl, timestamp)
+                self._observed_graph.add_node_poisoning(node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli, timestamp)
 
 
             elif event_type == 'node_killed':

@@ -1,5 +1,5 @@
 -module(agds).
--export([create/2, add_VNG/3, add_observation/2, infere/3, reset_excitation/1, end_experiment/1, delete/1]).
+-export([create/2, add_VNG/4, add_observation/2, infere/3, reset_excitation/1, end_experiment/1, delete/1]).
 -export([poison/4]).
 -export([get_excitation_for_vng/2]).
 
@@ -14,7 +14,7 @@ create(StructureId, Connection) -> spawn(fun() -> init(StructureId, Connection) 
 
 
 %% VNGType: categorical | numerical
-add_VNG(AGDS, Name, VNGType) -> AGDS ! {add_VNG, Name, VNGType}.
+add_VNG(AGDS, Name, VNGType, IsAction) -> AGDS ! {add_VNG, Name, VNGType, IsAction}.
 
 %% Values: #{VNGName := ObservedValue}
 add_observation(AGDS, Values) -> AGDS ! {add_observation, Values}.
@@ -68,11 +68,11 @@ process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_
                 subscription_init_ok ->
                     process_events(State);
 
-                {add_vng, Name, categorical} -> 
-                    process_events(#state{vngs = VNGs#{Name => vng:create_categorical_VNG(Name, GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
+                {add_vng, Name, categorical, IsAction} -> 
+                    process_events(#state{vngs = VNGs#{Name => vng:create_categorical_VNG(Name, IsAction, GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
 
-                {add_vng, Name, numerical, Epsilon} ->
-                    process_events(#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
+                {add_vng, Name, numerical, Epsilon, IsAction} ->
+                    process_events(#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, IsAction, GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
 
                 {add_observation, Values} ->
                     ST = print_start(add_observation),
@@ -90,9 +90,9 @@ process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_
                     print_end(ST),
                     process_events(State);
 
-                {poison, InitialStimulation, MaxDepth, DeadlyDose} ->
+                {poison, InitialStimulation, MaxDepth, DeadlyDose, MinimumAccumulatedDose} ->
                     ST = print_start(poison),
-                    StimulationKind = {poison, DeadlyDose},
+                    StimulationKind = {poison, DeadlyDose, MinimumAccumulatedDose, erlang:unique_integer([positive])},
                     maps:foreach(fun(Target, Stimuli) -> stimulate(Target, Stimuli, MaxDepth, VNGs, ONG, StimulationKind) end, InitialStimulation),
                     timer:sleep((TimestepMs + 5) * MaxDepth),
                     rabbitmq:respond("poisoning_finished", Channel),

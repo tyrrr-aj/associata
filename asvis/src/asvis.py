@@ -5,6 +5,7 @@ import sys
 
 def main():
     print('Asvis started')
+    print(f'Python interpreter: {sys.executable}, version: {sys.version}')
 
     if len(sys.argv) != 2:
         out_path = '.'  # Default output path

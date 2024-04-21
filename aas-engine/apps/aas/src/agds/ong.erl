@@ -69,7 +69,7 @@ process_events(ONs, GlobalCfg, NextONIndex) ->
         {stimulate, ONIndex, Stimulation, MaxDepth, StimulationKind} ->
             % TODO: check if ONIndex is valid (requires settimg up an error channel from backend to client)
             StimulatedON = maps:get(ONIndex, ONs),
-            on:stimulate(StimulatedON, self(), Stimulation, 0, MaxDepth, StimulationKind),
+            on:stimulate(StimulatedON, self(), Stimulation, 0, MaxDepth, StimulationKind, false),
             process_events(ONs, GlobalCfg, NextONIndex);
 
 
