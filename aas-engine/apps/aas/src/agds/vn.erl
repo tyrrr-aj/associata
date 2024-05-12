@@ -1,5 +1,5 @@
 -module(vn).
--export([create_VN/7, 
+-export([create_VN/8, 
         connect_VN/3, 
         connect_ON/2, 
         disconnect_ON/2,
@@ -17,17 +17,17 @@
 
 -include("config.hrl").
 
--record(state, {vn_type, vng, vng_name, vng_is_action, vng_to_on_conn_count, repr_value, connected_vns, connected_ons, last_excitation, vng_range, global_cfg}).
+-record(state, {vn_type, vng, vng_name, vng_is_action, vng_to_on_conn_count, repr_value, connected_vns, connected_ons, last_excitation, vng_range, agds, global_cfg}).
 
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%% 
 
-create_VN(RepresentedValue, categorical, VNGName, VNGIsAction, VNG, VNGtoONConnCount, GlobalCfg) -> 
-    spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, GlobalCfg) end);
+create_VN(RepresentedValue, categorical, VNGName, VNGIsAction, VNG, VNGtoONConnCount, AGDS, GlobalCfg) -> 
+    spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, GlobalCfg) end);
 
-create_VN(RepresentedValue, VNGRange, VNGName, VNGIsAction, VNG, VNGtoONConnCount, GlobalCfg) -> 
-    spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, GlobalCfg) end).
+create_VN(RepresentedValue, VNGRange, VNGName, VNGIsAction, VNG, VNGtoONConnCount, AGDS, GlobalCfg) -> 
+    spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, GlobalCfg) end).
 
 
 connect_VN(ThisVN, ConnectedVN, ConnectedVNValue) -> ThisVN ! {connect_VN, ConnectedVN, ConnectedVNValue}.
@@ -106,7 +106,7 @@ delete(ThisVN) -> ThisVN ! delete.
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
         vn_type=categorical, 
@@ -119,10 +119,11 @@ init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount,
         connected_ons=[], 
         last_excitation=0.0, 
         vng_range=na, 
+        agds=AGDS, 
         global_cfg=GlobalCfg
     });
 
-init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
         vn_type=numeric, 
@@ -135,6 +136,7 @@ init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, #g
         connected_ons=[], 
         last_excitation=0.0, 
         vng_range=VNGRange, 
+        agds=AGDS, 
         global_cfg=GlobalCfg
     }).
 
@@ -151,6 +153,7 @@ process_events(#state{
         connected_ons=ConnectedONs, 
         last_excitation=LastExcitation, 
         vng_range=VNGRange, 
+        agds=AGDS, 
         global_cfg=#global_cfg{reporter=Reporter, timestep_ms=TimestepMs} = GlobalCfg
     } = State) -> 
 
@@ -166,33 +169,39 @@ process_events(#state{
             
             if 
                 NewInferenceDepth < MaxInferenceDepth ->
-                    timer:sleep(TimestepMs),
+                    % timer:sleep(TimestepMs),
 
-                    case VNType of
-                        categorical -> ok;
-                        numeric -> 
-                            lists:foreach(
-                                fun(VN) -> stimulate_neigh_vn(
-                                    VN, RepresentedValue, Stimuli, VNGRange, NewInferenceDepth, MaxInferenceDepth, StimulationKind
-                                ) end, 
-                                lists:delete(Source, tuple_to_list(ConnectedVNs))
-                            )
+                    StimulatedNeighVNs = case VNType of
+                        categorical -> [];
+                        numeric -> [Neigh || Neigh <- tuple_to_list(ConnectedVNs), Neigh /= none, element(1, Neigh) /= Source]
                     end,
-
-                    ONStimuli = Stimuli * weight_vn_to_on(ConnectedONs, VNGtoONConnCount),
                     
-                    lists:foreach(
-                        fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind, VNGIsAction) end, 
-                        lists:delete(Source, ConnectedONs)
-                    );
+                    StimulatedNeighONs = lists:delete(Source, ConnectedONs);
+                    
                 true -> 
                     % case StimulationKind of
                     %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
                     %     {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
                     % end
-                    ok
+                    StimulatedNeighVNs = [],
+                    StimulatedNeighONs = []
             end,
-        
+
+            agds:notify_node_stimulated(AGDS, length(StimulatedNeighVNs) + length(StimulatedNeighONs)),
+
+            lists:foreach(
+                fun(VN) -> stimulate_neigh_vn(
+                    VN, RepresentedValue, Stimuli, VNGRange, NewInferenceDepth, MaxInferenceDepth, StimulationKind
+                ) end,
+                StimulatedNeighVNs
+            ),
+
+            ONStimuli = Stimuli * weight_vn_to_on(ConnectedONs, VNGtoONConnCount),
+            lists:foreach(
+                fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind, VNGIsAction) end, 
+                StimulatedNeighONs
+            ),
+            
             process_events(State#state{last_excitation=NewExcitation});
 
 
@@ -238,7 +247,7 @@ process_events(#state{
                     end,
 
                     vng:remove_killed_vn(VNG, RepresentedValue, self()),
-                    killed;
+                    zombie_wait_for_orphan_stimulations(AGDS);
 
                 _ -> process_events(State#state{connected_ons=NewConnectedONs})
             end;
@@ -314,7 +323,7 @@ process_events(#state{
     end.
 
 
-stimulate_neigh_vn(none, _OwnReprValue, _ReceivedStimuli, _VNGRange, _NewInferenceDepth, _MaxInferenceDepth, _StimulationKind) -> noop;
+% stimulate_neigh_vn(none, _OwnReprValue, _ReceivedStimuli, _VNGRange, _NewInferenceDepth, _MaxInferenceDepth, _StimulationKind) -> noop;
 
 stimulate_neigh_vn({TargetVN, TargetVNReprValue}, OwnReprValue, ReceivedStimuli, VNGRange, NewInferenceDepth, MaxInferenceDepth, StimulationKind) ->
     StimuliToPass = ReceivedStimuli * (VNGRange - abs(OwnReprValue - TargetVNReprValue)) / VNGRange,
@@ -340,3 +349,12 @@ report_breaking_connection(none, _NewConnectedVN, _GlobalCfg) -> ok;
 report_breaking_connection({OldConnectedVN, _OldConnectedVNValue}, NewConnectedVN, _GlobalCfg) when OldConnectedVN == NewConnectedVN -> ok;
 
 report_breaking_connection({OtherVN, _OtherVNValue}, _NewConnectedVN, #global_cfg{reporter=Reporter}) -> report:connection_broken(self(), OtherVN, Reporter).
+
+
+zombie_wait_for_orphan_stimulations(AGDS) ->
+    receive
+        {stimulate, _Source, _Stimuli, _CurrInferenceDepth, _MaxInferenceDepth, _StimulationKind} ->
+            agds:notify_node_stimulated(AGDS, 0),
+            zombie_wait_for_orphan_stimulations(AGDS)
+    after 5000 -> killed
+    end.

@@ -1,14 +1,14 @@
 -module(on).
--export([create_ON/3, connect_VN/2, disconnect_VN/2, stimulate/7, get_excitation/1, reset_excitation/1, get_neighbours/1, get_index/1, delete/1]).
+-export([create_ON/4, connect_VN/2, disconnect_VN/2, stimulate/7, get_excitation/1, reset_excitation/1, get_neighbours/1, get_index/1, delete/1]).
 
 -include("config.hrl").
 
--record(state, {self_index, ong, connected_vns, last_excitation, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, tmp_poisoning_id, global_cfg}).
+-record(state, {self_index, ong, connected_vns, last_excitation, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, tmp_poisoning_id, agds, global_cfg}).
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
 
-create_ON(ONG, ONIndex, GlobalCfg) -> spawn(fun() -> init(ONG, ONIndex, GlobalCfg) end).
+create_ON(ONG, ONIndex, AGDS, GlobalCfg) -> spawn(fun() -> init(ONG, ONIndex, AGDS, GlobalCfg) end).
 
 
 connect_VN(ON, VN) -> ON ! {connect, VN}.
@@ -64,34 +64,23 @@ delete(ON) -> ON ! delete.
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(ONG, ONIndex, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(ONG, ONIndex, AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), on, ONIndex, ONG, Reporter),
-    process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=[], last_excitation=0.0, acc_poison_lvl=0.0, tmp_poison_lvl=0.0, tmp_poison_multiplier=0.0, tmp_poisoning_id=-1, global_cfg=GlobalCfg}).
+    process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=[], last_excitation=0.0, acc_poison_lvl=0.0, tmp_poison_lvl=0.0, tmp_poison_multiplier=0.0, tmp_poisoning_id=-1, agds=AGDS, global_cfg=GlobalCfg}).
 
 
-process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, last_excitation=LastExcitation, acc_poison_lvl=AccPoisonLvl, tmp_poison_lvl=TmpPoisonLvl, tmp_poison_multiplier=TmpPoisonMultiplier, tmp_poisoning_id=TmpPoisoningId, global_cfg=#global_cfg{reporter=Reporter, timestep_ms=TimestepMs}} = State) -> 
+process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, last_excitation=LastExcitation, acc_poison_lvl=AccPoisonLvl, tmp_poison_lvl=TmpPoisonLvl, tmp_poison_multiplier=TmpPoisonMultiplier, tmp_poisoning_id=TmpPoisoningId, agds=AGDS, global_cfg=#global_cfg{reporter=Reporter, timestep_ms=TimestepMs}} = State) -> 
     receive
         {stimulate, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, StimulationKind, StimuliFromActionVNG} ->
             NewInferenceDepth = CurrInferenceDepth + 1,
 
-            % NEEDS TO BE MOVED - NewExcitation no longer available here
-            % case StimulationKind of
-            %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-            %     {poison, DeadlyDoseRep} -> report:node_poisoned(self(), NewExcitation, DeadlyDoseRep, Reporter)
-            % end,
-
-            if 
-                NewInferenceDepth < MaxInferenceDepth ->
-                    timer:sleep(TimestepMs),
-                    [vn:stimulate(VN, self(), Stimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) || VN <- ConnectedVNs, VN /= Source];
-                true -> 
-                    % NEEDS TO BE MOVED - NewExcitation no longer available here
-                    % case StimulationKind of
-                    %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-                    %     {poison, DeadlyDoseRep} -> report:node_poisoned(self(), NewExcitation, DeadlyDoseRep, Reporter)
-                    % end
-                    ok
+            StimulatedVNs = if 
+                NewInferenceDepth < MaxInferenceDepth -> [VN || VN <- ConnectedVNs, VN /= Source];
+                true -> []
             end,
+
+            agds:notify_node_stimulated(AGDS, length(StimulatedVNs)),
+            lists:foreach(fun(VN) -> vn:stimulate(VN, self(), Stimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind) end, StimulatedVNs),
 
             case StimulationKind of
                 infere -> 
@@ -128,7 +117,6 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
                             end;
 
                         NewPoisoningId ->
-                            % report:node_poisoned(self(), AccPoisonLvl, DeadlyDose, Reporter),
                             
                             NewTmpPoisoningId = NewPoisoningId,
                             NewAccPoisonLvl = AccPoisonLvl,
@@ -143,14 +131,14 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
                             end
                     end,
 
-                    % report:node_poisoned(self(), NewAccPoisonLvl, NewTmpPoisonLvl, TmpPoisonMultiplier, Source, Stimuli, Reporter),
+                    % report:node_poisoned(self(), NewAccPoisonLvl, NewTmpPoisonLvl, NewTmpPoisonMultiplier, Source, Stimuli, Reporter),
 
                     if 
                         NewAccPoisonLvl >= DeadlyDose -> 
                             report:node_killed(self(), Reporter),
                             [vn:disconnect_ON(VN, self()) || VN <- ConnectedVNs],
-                            ong:remove_killed_ON(ONG, ONIndex);
-                            killed;
+                            ong:remove_killed_ON(ONG, ONIndex),
+                            zombie_wait_for_orphan_stimulations(AGDS);
                         true ->
                             process_events(State#state{acc_poison_lvl=NewAccPoisonLvl, tmp_poison_lvl=NewTmpPoisonLvl, tmp_poison_multiplier=NewTmpPoisonMultiplier, tmp_poisoning_id=NewTmpPoisoningId})
                     end
@@ -189,4 +177,13 @@ process_events(#state{self_index=ONIndex, ong=ONG, connected_vns=ConnectedVNs, l
 
 
         delete -> ok
+    end.
+
+
+zombie_wait_for_orphan_stimulations(AGDS) ->
+    receive
+        {stimulate, _Source, _Stimuli, _CurrInferenceDepth, _MaxInferenceDepth, _StimulationKind, _StimuliFromActionVNG} ->
+            agds:notify_node_stimulated(AGDS, 0),
+            zombie_wait_for_orphan_stimulations(AGDS)
+    after 5000 -> killed
     end.

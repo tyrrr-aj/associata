@@ -2,10 +2,11 @@
 -export([create/2, add_VNG/4, add_observation/2, infere/3, reset_excitation/1, end_experiment/1, delete/1]).
 -export([poison/4]).
 -export([get_excitation_for_vng/2]).
+-export([notify_node_stimulated/2]).
 
 -include("config.hrl").
 
--record(state, {vngs = #{}, ong, global_cfg, channel}).
+-record(state, {vngs = #{}, ong, global_cfg, channel, total_infere_time=0.0, total_poison_time=0.0}).
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
@@ -44,6 +45,13 @@ end_experiment(AGDS) -> AGDS ! end_experiment.
 delete(AGDS) -> AGDS ! delete.
 
 
+notify_node_stimulated(AGDS, StimulatedNeighboursCount) -> 
+    AGDS ! {node_stimulated, StimulatedNeighboursCount, self()},
+    receive
+        notification_processed -> ok
+    end.
+
+
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
 init(StructureId, Connection) ->
@@ -56,10 +64,10 @@ init(StructureId, Connection) ->
     TimestepMs = 5,
     GlobalCfg = #global_cfg{reporter=Reporter, timestep_ms=TimestepMs},
 
-    process_events(#state{ong = ong:create_ONG(GlobalCfg), global_cfg = GlobalCfg, channel = Channel}).
+    process_events(#state{ong = ong:create_ONG(self(), GlobalCfg), global_cfg = GlobalCfg, channel = Channel}).
 
 
-process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_ms = TimestepMs} = GlobalCfg, channel = Channel} = State) ->
+process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_ms = TimestepMs} = GlobalCfg, channel = Channel, total_infere_time=TotalInfereTime, total_poison_time=TotalPoisonTime} = State) ->
     receive
         Cmd -> 
             Message = rabbitmq:decode_and_ack_message(Cmd, Channel),
@@ -69,10 +77,10 @@ process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_
                     process_events(State);
 
                 {add_vng, Name, categorical, IsAction} -> 
-                    process_events(#state{vngs = VNGs#{Name => vng:create_categorical_VNG(Name, IsAction, GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
+                    process_events(#state{vngs = VNGs#{Name => vng:create_categorical_VNG(Name, IsAction, self(), GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
 
                 {add_vng, Name, numerical, Epsilon, IsAction} ->
-                    process_events(#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, IsAction, GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
+                    process_events(#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, IsAction, self(), GlobalCfg)}, ong = ONG, global_cfg = GlobalCfg, channel = Channel});
 
                 {add_observation, Values} ->
                     ST = print_start(add_observation),
@@ -82,22 +90,28 @@ process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_
                     process_events(State);
 
                 {infere, InitialStimulation, MaxInferenceDepth} ->
+                    CallStartTime = erlang:monotonic_time(millisecond),
                     ST = print_start(infere),
                     StimulationKind = infere,
-                    maps:foreach(fun(Target, Stimuli) -> stimulate(Target, Stimuli, MaxInferenceDepth, VNGs, ONG, StimulationKind) end, InitialStimulation),
-                    timer:sleep((TimestepMs + 5) * MaxInferenceDepth),
+                    InitStimulatedNodesCount = maps:fold(fun(Target, Stimuli, Acc) -> Acc + stimulate(Target, Stimuli, MaxInferenceDepth, VNGs, ONG, StimulationKind) end, 0, InitialStimulation),
+                    % timer:sleep((TimestepMs + 5) * MaxInferenceDepth),
+                    wait_for_inference_to_finish(InitStimulatedNodesCount),
                     rabbitmq:respond("inference_finished", Channel),
                     print_end(ST),
-                    process_events(State);
+                    CallElapsedTime = erlang:monotonic_time(millisecond) - CallStartTime,
+                    process_events(State#state{total_infere_time = TotalInfereTime + CallElapsedTime});
 
                 {poison, InitialStimulation, MaxDepth, DeadlyDose, MinimumAccumulatedDose} ->
+                    CallStartTime = erlang:monotonic_time(millisecond),
                     ST = print_start(poison),
                     StimulationKind = {poison, DeadlyDose, MinimumAccumulatedDose, erlang:unique_integer([positive])},
-                    maps:foreach(fun(Target, Stimuli) -> stimulate(Target, Stimuli, MaxDepth, VNGs, ONG, StimulationKind) end, InitialStimulation),
-                    timer:sleep((TimestepMs + 5) * MaxDepth),
+                    InitStimulatedNodesCount = maps:fold(fun(Target, Stimuli, Acc) -> Acc + stimulate(Target, Stimuli, MaxDepth, VNGs, ONG, StimulationKind) end, 0, InitialStimulation),
+                    % timer:sleep((TimestepMs + 5) * MaxDepth),
+                    wait_for_inference_to_finish(InitStimulatedNodesCount),
                     rabbitmq:respond("poisoning_finished", Channel),
                     print_end(ST),
-                    process_events(State);
+                    CallElapsedTime = erlang:monotonic_time(millisecond) - CallStartTime,
+                    process_events(State#state{total_poison_time = TotalPoisonTime + CallElapsedTime});
 
                 {get_excitation, vng, VNGName} ->
                     ST = print_start(get_excitation_vng),
@@ -144,6 +158,10 @@ process_events(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{timestep_
                     process_events(State);
 
                 stop ->
+                    file:write_file(
+                        "C:\\Users\\adams\\Doktorat\\aasociata\\pyassoc\\backend_profile.txt", 
+                        io_lib:fwrite("Total infere time: ~f~nTotal poison time: ~f~n", [TotalInfereTime / 1000, TotalPoisonTime / 1000])
+                    ),
                     save_experiment(GlobalCfg),
                     rabbitmq:respond("structure_stopped", Channel),
                     delete_impl(State)
@@ -166,6 +184,51 @@ delete_impl(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{reporter = R
 
 
 save_experiment(#global_cfg{reporter = Reporter}) -> report:experiment_end(Reporter).
+
+
+wait_for_inference_to_finish(0) -> 
+    ok;
+
+wait_for_inference_to_finish(ExpectedStimulationsCount) ->
+    receive
+        {node_stimulated, StimulatedNeighboursCount, Notifier} ->
+            % io:format("Received node_stimulated message with StimulatedNeighboursCount (ExpectedStimulationsCount: ~p): ~p~n", [ExpectedStimulationsCount, StimulatedNeighboursCount]),
+            NewExpectedStimulationsCount = ExpectedStimulationsCount + StimulatedNeighboursCount - 1,
+            Notifier ! notification_processed,
+            wait_for_inference_to_finish(NewExpectedStimulationsCount)
+    end.
+
+
+%% POTENTIAL OPTIMIZATION - async processing of node_stimulated messages
+% wait_for_inference_to_finish(0) -> 
+%     ok;
+
+% wait_for_inference_to_finish(InitExpectedStimulationsCount) ->
+%     wait_for_inference_to_finish_loop(#{0 => InitExpectedStimulationsCount}).
+
+
+% wait_for_inference_to_finish_loop(#{}) -> ok;
+
+% wait_for_inference_to_finish_loop(ExpectedStimulationsCounts) ->
+%     receive
+%         {node_stimulated, StimulatedNeighboursCount, CurrInferenceDepth} ->
+%             StimulationsCountForCurrDepth = maps:get(CurrInferenceDepth, ExpectedStimulationsCounts, 0),
+%             NewStimulationsCountForCurrDepth = StimulationsCountForCurrDepth - 1,
+%             ExpectedStimulationsCountsUpdatedForCurrDepth = if 
+%                 NewStimulationsCountForCurrDepth == 0 -> maps:remove(CurrInferenceDepth, ExpectedStimulationsCounts);
+%                 true -> ExpectedStimulationsCounts#{CurrInferenceDepth => NewStimulationsCountForCurrDepth}
+%             end,
+
+%             NextInferenceDepth = CurrInferenceDepth + 1,            
+%             StimulationsCountForNextDepth = maps:get(NextInferenceDepth, ExpectedStimulationsCounts, 0),
+%             NewStimulationsCountForNextDepth = StimulationsCountForNextDepth + StimulatedNeighboursCount,
+%             ExpectedStimulationsCountsUpdatedForNextDepth = if
+%                 NewStimulationsCountForNextDepth == 0 -> maps:remove(NextInferenceDepth, ExpectedStimulationsCountsUpdatedForCurrDepth);
+%                 true -> ExpectedStimulationsCountsUpdatedForCurrDepth#{NextInferenceDepth => NewStimulationsCountForNextDepth}
+%             end,
+
+%             wait_for_inference_to_finish_loop(ExpectedStimulationsCountsUpdatedForNextDepth)
+%     end.
 
 
 print_start(Event) ->

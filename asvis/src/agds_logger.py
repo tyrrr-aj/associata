@@ -119,6 +119,13 @@ class AgdsLogger:
             elif event_type == 'node_poisoned':
                 info_format = '{{{},{},{},{},{},{}}}'
                 [node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli] = parse.parse(info_format, event_info)
+
+                try:
+                    acc_poison_lvl = round(float(acc_poison_lvl), 3)
+                    tmp_poison_lvl = round(float(tmp_poison_lvl), 3)
+                    tmp_poison_multiplier = round(float(tmp_poison_multiplier), 3)
+                except:
+                    pass
                 
                 self._observed_graph.add_node_poisoning(node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli, timestamp)
 
