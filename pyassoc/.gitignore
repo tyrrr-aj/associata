@@ -4,4 +4,6 @@ __pycache__
 experiments
 models
 *.log
+*.txt
+results
 erl_crash.dump
