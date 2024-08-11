@@ -1,3 +1,7 @@
 erl_crash.dump
 .vscode
 *.log
+*.out
+*.svg
+tmp/
+eflame/

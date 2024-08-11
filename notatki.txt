@@ -23,8 +23,41 @@ Naukowo ;) :
 
 SarsaAGDS:
 - use excitation of best sa as alpha parameter (dynamic step size equal to/proportional to strength of association)
-- use value(best_sa) to form dynamic greede_epsilon (tend to explore more if known actions are unsatisfactory, possibly decay over time (to avoid precise manual tuning))
+- use value(best_sa) to form dynamic greedy_epsilon (tend to explore more if known actions are unsatisfactory, possibly decay over time (to avoid precise manual tuning))
+
+PROBLEM:
+W obecnym algorytmie za każdym razem pobudzamy wszystkie VNy odpowiadające za wartość akcji, z więc zawsze pobudzamy też wszystkie ON - czyli zawsze przeglądamy wszystkie wspomnienia.
+Może lepiej byłoby, gdyby Vny odpowiadające za wartość akcji odpowiadały na każdą stymulację ze wzmocnieniem proporcjonalnym do przechowywanej wartości?
+Wymaga to zadbania o odpowiednią głębokość inferencji, ale pozwoli korzystać z właściwości AGDS (bezpośredni dostępdo konkretnych wspomnień bez przeszukiwania całości).
 
 
 Punkt cięcia:
 poprawka w avbtree:add, dodanie informacji zwrotnej czy wartość była już w drzewie, obsłużyć w vng (i opcjonalnie testach)
+
+
+
+
+do_zrobienia_tmp:
+recursive_stimulation_finished:
+    - zombie stimulation_finished passing
+    - agds:wait_for_stimulation_to_finish
+    - agds:stimulate_vng, agds:stimulate_ong (change from single ON/VN to all-at-once)
+
+
+
+
+RabbitMQ performance:
+=============== Step 25330 ===============
+[14365s] Picked action: [0]
+
+Pyrlang performance:
+=============== Step 19999 ===============
+[8813s] Picked action: [1]
+
+
+Benchmarking...
+Data size: 100000
+RabbitMQ time: 69.37s
+Pyrlang time: 2.12s     <------------- The winner!
+ZeroMQ time: 26.83s
+

@@ -1,6 +1,8 @@
 import gymnasium as gym
 import associata
 from rl import *
+import asyncio
+import numpy as np
 
 
 # ############# Cart pole #############
@@ -13,25 +15,30 @@ action_space = np.array([0, 1])
 
 # ############# Sarsa-AGDS #############
 
-associata.init()
-sarsa_agds = SarsaAGDS(state_space_feature_names, state_space_bounds, state_space_epsilon, action_space)
+async def run():
+    await associata.init()
+    sarsa_agds = SarsaAGDS(state_space_feature_names, state_space_bounds, state_space_epsilon, action_space)
 
-env = gym.make("CartPole-v1", render_mode="rgb_array")
-observation, info = env.reset(seed=42)
+    env = gym.make("CartPole-v1", render_mode="rgb_array")
+    observation, info = env.reset(seed=42)
 
-reward = None
+    reward = None
 
-for _ in range(1000):
-    action = sarsa_agds.step(observation, reward)[0]
-    observation, reward, terminated, truncated, info = env.step(action)
+    for _ in range(4000):
+        action = (await sarsa_agds.step(observation, reward))[0]
+        observation, reward, terminated, truncated, info = env.step(action)
 
-    if terminated or truncated:
-        observation, info = env.reset()
-        sarsa_agds.reset_episode()
-        reward = None
+        if terminated or truncated:
+            observation, info = env.reset()
+            sarsa_agds.reset_episode()
+            reward = None
 
-sarsa_agds.reset_episode(False)
-env.close()
+    sarsa_agds.reset_episode(False)
+    env.close()
 
-sarsa_agds.stop()
-associata.stop()
+    await sarsa_agds.stop()
+    await associata.stop()
+
+
+if __name__ == "__main__":
+    asyncio.run(run())

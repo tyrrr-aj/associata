@@ -5,21 +5,19 @@
 -export([start_link/0]).
 -export([init/1, handle_call/3, handle_cast/2, handle_info/2, terminate/2]).
 
--record(state, {rabbitmq_connection :: any, ctrl_channel :: any, log_file :: any, structures = #{}}).
+-record(state, {log_file :: any, structures = #{}}).
 
 
-start_link() -> gen_server:start_link({local, ?MODULE}, ?MODULE, [], []).
+start_link() -> gen_server:start_link({local, ctrl}, ?MODULE, [], []).
 
 
 init([]) -> 
     {ok, LogFile} = file:open("aas_ctrl.log", [write]),
     file:write(LogFile, "Started\n"),
+
+    pyrlang:send_client(ctrl, started),
     
-    Connection = rabbitmq:connect(),
-    CtrlChannel = rabbitmq:setup_channel(Connection, "ctrl"),
-    rabbitmq:respond("started", CtrlChannel),
-    
-    {ok, #state{rabbitmq_connection = Connection, ctrl_channel = CtrlChannel, log_file = LogFile}}.
+    {ok, #state{log_file = LogFile}}.
 
 
 handle_call(_Cmd, _From, State) ->
@@ -30,26 +28,22 @@ handle_cast(_Cmd, State) ->
     {noreply, State}.
 
 
-handle_info(Info, #state{rabbitmq_connection = Connection, ctrl_channel = CtrlChannel, log_file = LogFile, structures = Structures} = State) ->
-    Message = rabbitmq:decode_and_ack_message(Info, CtrlChannel),
-    
-    file:write(LogFile, io_lib:format("Received ctrl message: ~p~n", [Message])),
+handle_info(Info, #state{log_file = LogFile, structures = Structures} = State) ->
+    file:write(LogFile, io_lib:format("Received ctrl message: ~p~n", [Info])),
 
-    case Message of
+    case Info of
         subscription_init_ok ->
             NewState = State;
 
         {new_structure, agds, StructureId} -> 
             file:write(LogFile, io_lib:format("Received new_structure message: ~p~n", [agds])),
 
-            AGDS = agds:create(StructureId, Connection),
+            AGDS = agds:create(StructureId),
             NewState = State#state{structures = maps:put(StructureId, AGDS, Structures)};
-
 
         stop -> 
             gen_server:stop(?MODULE),
             NewState = State;
-
 
         _ -> 
             NewState = State
@@ -59,12 +53,8 @@ handle_info(Info, #state{rabbitmq_connection = Connection, ctrl_channel = CtrlCh
 
 
 
-terminate(_Reason, #state{rabbitmq_connection = Connection, ctrl_channel = CtrlChannel, log_file = LogFile, structures = Structures}) ->
+terminate(_Reason, #state{log_file = LogFile, structures = Structures}) ->
     maps:foreach(fun (_StructureId, AGDS) -> agds:end_experiment(AGDS) end, Structures),
-
-    rabbitmq:respond("stopped", CtrlChannel),
-    rabbitmq:teardown_channel(CtrlChannel),
-    rabbitmq:disconnect(Connection),
-    
     file:close(LogFile),
+    % init:stop().
     ok.

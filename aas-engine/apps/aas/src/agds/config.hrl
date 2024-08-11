@@ -1,1 +1,1 @@
--record(global_cfg, {reporter, timestep_ms}).
+-record(global_cfg, {reporter, timestep_ms, dbg_counter}).

@@ -48,7 +48,7 @@ node_killed(NodeId, Reporter) -> report_timestamped(node_killed, {NodeId}, Repor
 stimuli_propagated(SourceNodeId, DestNodeId, Stimuli, Reporter) -> report_timestamped(stimuli_propagated, {SourceNodeId, DestNodeId, Stimuli}, Reporter).
 
 
-experiment_end(Reporter) -> report_timestamped(experiment_end, none, Reporter).
+experiment_end(Reporter) -> report_timestamped(experiment_end, {none}, Reporter).
 
 
 stop(Reporter) -> Reporter ! stop.
@@ -60,15 +60,15 @@ report_timestamped(EventType, Args, Reporter) ->
     Reporter ! {EventType, {erlang:monotonic_time(millisecond), erlang:unique_integer([monotonic])}, Args}.
 
 
-init(#{mode := rabbitmq, channel := _Channel} = ReportConfig) ->
+init(ReportConfig) ->
     process_events(ReportConfig).
 
 
-process_events(#{mode := Mode, channel := Channel} = ReportConfig) ->
+process_events(#{mode := Mode, structure_id := StructureId} = ReportConfig) ->
     receive
         {EventType, Timestamp, Params} -> 
             case Mode of
-                rabbitmq -> rabbitmq:log(Timestamp, EventType, Params, Channel)
+                pyrlang -> {StructureId, aas_vis@Beast} ! {Timestamp, EventType, Params}
             end,
             process_events(ReportConfig);
 
