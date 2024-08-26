@@ -61,3 +61,13 @@ RabbitMQ time: 69.37s
 Pyrlang time: 2.12s     <------------- The winner!
 ZeroMQ time: 26.83s
 
+
+
+1000    7s
+2000    22s
+4000    73s
+8000    220s
+16000   670s
+32000   2100s
+64000   6300s
+128000  20000s

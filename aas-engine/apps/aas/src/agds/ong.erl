@@ -1,8 +1,9 @@
 -module(ong).
--export([create_ONG/2, new_ON/1, stimulate/4, get_excitation/2, reset_excitation/1, wait_for_reset_excitation/1, get_neighbours/2, delete/1]).
+-export([create_ONG/2, new_ON/1, stimulate/3, get_excitation/2, get_neighbours/2, delete/1]).
 -export([remove_killed_ON/2]).
 
 -include("config.hrl").
+-include("stimulation.hrl").
 
 -record(state, {ons, next_on_index, stimulated_ons, agds, global_cfg}).
 
@@ -16,38 +17,22 @@ create_ONG(AGDS, GlobalCfg) ->
 new_ON(ONG) -> 
     ONG ! {new_ON, self()},
     receive
-        {new_ON, NewON} -> NewON
+        {new_ON, NewON, NewONIndex} -> {NewON, NewONIndex}
     end.
 
 %  ONIndex is 0-based
-% stimulate(ONG, ONIndex, Stimulation, MaxDepth, StimulationKind) -> 
-%     ONG ! {stimulate, ONIndex, Stimulation, MaxDepth, StimulationKind},
-%     1.  % ONG alway stimulates a single node; function should never be called on an empty ONG (there is no valid ONIndex then).
-
-%  NEW VERSION: with recursive stimulation_finished gathering, requires all stimulations for ONG to be passed at once
-stimulate(ONG, Stimulations, MaxDepth, StimulationKind) -> 
-    ONG ! {stimulate, Stimulations, MaxDepth, StimulationKind}.
+stimulate(ONG, Stimuli, StimulationSpec) -> 
+    ONG ! {stimulate, Stimuli, StimulationSpec}.
 
 
 remove_killed_ON(ONG, ONIndex) -> 
-    % io:format("ONG: remove killed ON (~f)~n", [erlang:monotonic_time() / 1.0]),
     ONG ! {remove_killed_ON, ONIndex}.
 
 
 get_excitation(ONG, LastStimulationId) -> 
-    % io:format("ONG: get excitation (~f)~n", [erlang:monotonic_time() / 1.0]),
     ONG ! {get_excitation, self(), LastStimulationId},
     receive 
         {ons_excitation, ONsExcitation} -> ONsExcitation
-    end.
-
-
-reset_excitation(ONG) -> 
-    ONG ! {reset_excitation, self()}.
-
-wait_for_reset_excitation(ONG) ->
-    receive
-        {reset_excitation_finished, ONG} -> ok
     end.
 
 
@@ -71,28 +56,35 @@ init(AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
 process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=StimulatedONs, agds=AGDS, global_cfg=GlobalCfg} = State) ->
     receive
         {new_ON, Sender} ->
-            NewON = on:create_ON(self(), NextONIndex, AGDS, GlobalCfg),
-            Sender ! {new_ON, NewON},
+            NewON = on:create_ON(self(), NextONIndex, GlobalCfg),
+            Sender ! {new_ON, NewON, NextONIndex},
             process_events(State#state{ons=ONs#{NextONIndex => NewON}, next_on_index=NextONIndex + 1});
 
 
-        % {stimulate, ONIndex, Stimulation, MaxDepth, StimulationKind} ->
-        %     % TODO: check if ONIndex is valid (requires setting up an error channel from backend to client)
-        %     StimulatedON = maps:get(ONIndex, ONs),
-        %     on:stimulate(StimulatedON, self(), Stimulation, 0, MaxDepth, StimulationKind, false),
-        %     process_events(State);
-        
-        % NEW VERSION: with recursive stimulation_finished gathering, requires all stimulations for ONG to be passed at once
-        {stimulate, Stimulations, MaxDepth, StimulationKind} ->
-            maps:foreach(fun(ONIndex, Stimulation) -> on:stimulate(ONIndex, self(), Stimulation, 0, MaxDepth, StimulationKind, false) end, Stimulations),
-            StimulatedONs = maps:keys(Stimulations),
-            process_events(State);
+        {stimulate, Stimuli, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec} ->
+            case maps:get(ong, NodeGroupModes) of
+                passive -> 
+                    stimulation:send_stimulation_finished(AGDS, 0),
+                    process_events(State);
+
+                _ -> 
+                    maps:foreach(fun(ONIndex, Stimulus) -> on:stimulate(maps:get(ONIndex, ONs), Stimulus, 0, StimulationSpec) end, Stimuli),
+                    NewStimulatedONs = maps:keys(Stimuli),
+
+                    case NewStimulatedONs of
+                        [] -> stimulation:send_stimulation_finished(AGDS, 0);
+                        _ -> ok
+                    end,
+
+                    process_events(State#state{stimulated_ons=NewStimulatedONs})
+            end;
 
         
-        {stimulation_finished, StimulatedON, 0} ->
+        {stimulation_finished, StimulatedON, 0, 1} ->
+            % io:format("~s    ONG: sitmulation_finished received from ~p, stimulated ons: ~p~n", [utils:get_timestamp_str(), StimulatedON, StimulatedONs]),
             NewStimulatedONs = lists:delete(StimulatedON, StimulatedONs),
             case NewStimulatedONs of
-                [] -> AGDS ! {stimulation_finished, self()};
+                [] -> stimulation:send_stimulation_finished(AGDS, 0);
                 _ -> ok
             end,
             process_events(State#state{stimulated_ons=NewStimulatedONs});
@@ -110,13 +102,6 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
             process_events(State);
 
 
-        {reset_excitation, Asker} ->
-            maps:foreach(fun(_Index, ON) -> on:reset_excitation(ON) end, ONs),
-            maps:foreach(fun(_Index, ON) -> on:wait_for_reset_excitation(ON) end, ONs),
-            Asker ! {reset_excitation_finished, self()},
-            process_events(State);
-
-
         {get_neighbours, ONIndex, Asker} ->
             case maps:get(ONIndex, ONs, none) of
                 none -> Asker ! {neighbours, {badkey, ONIndex}};
@@ -124,12 +109,6 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
             end,
             
             process_events(State);
-
-
-        % {report_stimulations_count, Asker} ->
-        %     maps:foreach(fun(ONIndex, ON) -> on:report_stimulations_count(ON, ONIndex) end, ONs),
-        %     Asker ! {stimulations_count_reported, self()},
-        %     process_events(State);
 
 
         delete -> 

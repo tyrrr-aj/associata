@@ -1,0 +1,1 @@
+-record(stim_spec, {id, kind, node_group_modes, min_passed_stimulus, params}).

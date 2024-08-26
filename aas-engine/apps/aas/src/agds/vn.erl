@@ -1,57 +1,50 @@
 -module(vn).
 -export([create_VN/8, 
         connect_VN/3, 
-        connect_ON/2, 
+        connect_ON/3, 
         disconnect_ON/2,
         disconnect_VN/3,
-        update_VNG_range/2, 
+        update_VNG_range/3, 
         update_VNG_to_ON_conn_count/2,
-        stimulate/6, 
-        get_excitation/2, 
-        reset_excitation/1,
-        wait_for_reset_excitation/1,
+        stimulate/4, 
+        get_excitation/2,
         get_neighbours/1,
-        get_left_connected_vn/1,
-        get_right_connected_vn/1,
-        get_repr_value_and_vng_name/1,
         delete/1
-        , report_stimulations_count/1
     ]).
 
 -include("config.hrl").
+-include("stimulation.hrl").
 
--record(state, {vn_type, 
-                vng, 
-                vng_name, 
-                vng_is_action, 
-                vng_to_on_conn_count, 
-                repr_value, 
-                connected_vns, 
-                connected_ons, 
-                last_excitation, 
-                curr_stimulation_id, 
-                stimulated_neighs,
-                vng_range, 
-                agds, 
-                global_cfg
-                , dbg_stimulations_count=0
+-record(state, {vn_type,                % categorical | numerical
+                vng,                    % pid
+                vng_name,               % string
+                vng_to_on_conn_count,   % integer
+                repr_value,             % any
+                connected_vns,          % {{pid, float} | none, {pid, float} | none} | na
+                connected_ons,          % #{pid := integer}
+                last_excitation,        % float
+                last_stimulation_id,    % none | integer
+                stimulated_neighs,      % #{integer => {#{pid := int}, #{pid := int}}}
+                vng_min_value,          % float
+                vng_max_value,          % float
+                global_cfg              % #global_cfg
             }).
 
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%% 
 
-create_VN(RepresentedValue, categorical, VNGName, VNGIsAction, VNG, VNGtoONConnCount, AGDS, GlobalCfg) -> 
-    spawn(fun() -> init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, GlobalCfg) end);
+create_VN(categorical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) -> 
+    spawn(fun() -> init(categorical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) end);
 
-create_VN(RepresentedValue, VNGRange, VNGName, VNGIsAction, VNG, VNGtoONConnCount, AGDS, GlobalCfg) -> 
-    spawn(fun() -> init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, GlobalCfg) end).
+create_VN(numerical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) -> 
+    spawn(fun() -> init(numerical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) end).
 
 
 connect_VN(ThisVN, ConnectedVN, ConnectedVNValue) -> ThisVN ! {connect_VN, ConnectedVN, ConnectedVNValue}.
 
 
-connect_ON(ThisVN, ON) -> ThisVN ! {connect_ON, ON}.
+connect_ON(ThisVN, ON, ONIndex) -> ThisVN ! {connect_ON, ON, ONIndex}.
 
 
 disconnect_ON(ThisVN, ON) -> ThisVN ! {disconnect_ON, ON}.
@@ -60,72 +53,33 @@ disconnect_ON(ThisVN, ON) -> ThisVN ! {disconnect_ON, ON}.
 disconnect_VN(ThisVN, DisconnectedVN, ReplacementVN) -> ThisVN ! {disconnect_VN, DisconnectedVN, ReplacementVN}.
 
 
-update_VNG_range(ThisVN, NewVNGRange) -> ThisVN ! {update_VNG_range, NewVNGRange}.
+update_VNG_range(ThisVN, NewVNGMinValue, NewVNGMaxValue) -> ThisVN ! {update_VNG_range, NewVNGMinValue, NewVNGMaxValue}.
 
 
-update_VNG_to_ON_conn_count(ThisVN, NewVNGtoONConnCount) -> ThisVN ! {update_VNG_to_ON_conn_count, NewVNGtoONConnCount}.
+update_VNG_to_ON_conn_count(ThisVN, NewEntireVNGConnCount) -> ThisVN ! {update_VNG_to_ON_conn_count, NewEntireVNGConnCount}.
 
 
-stimulate(ThisVN, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, StimulationKind) -> 
-    ThisVN ! {stimulate, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, StimulationKind}.
+stimulate(ThisVN, Stimulus, CurrDepth, StimulationSpec) -> 
+    ThisVN ! {stimulate, self(), Stimulus, CurrDepth, StimulationSpec}.
 
 
 get_excitation(ThisVN, LastStimulationId) -> 
     ThisVN ! {get_excitation, self(), LastStimulationId},
+    % io:format("~s    VN ~p (VNG: ~p): get_excitation sent~n", [utils:get_timestamp_str(), ThisVN, self()]),
     receive
         {last_excitation, Excitation} -> Excitation;
-        {remove_killed_vn, ReprValue, VN} -> 
-            vng:remove_killed_vn(self(), ReprValue, VN),
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
             none
-    end.
-
-
-reset_excitation(ThisVN) -> 
-    ThisVN ! {reset_excitation, self()}.
-
-wait_for_reset_excitation(ThisVN) ->
-    receive
-        {reset_excitation_finished, ThisVN} -> ok;
-        {remove_killed_vn, ReprValue, VN} -> 
-            vng:remove_killed_vn(self(), ReprValue, VN),
-            ok
     end.
 
 
 get_neighbours(ThisVN) -> ThisVN ! {get_neighbours, self()},
     receive
         {neighbours, Neighbours} -> Neighbours;
-        {remove_killed_vn, ReprValue, VN} -> 
-            vng:remove_killed_vn(self(), ReprValue, VN),
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
             []
-    end.
-
-
-get_left_connected_vn(ThisVN) ->
-    ThisVN ! {get_left_connected_vn, self()},
-    receive
-        {left_connected_vn, LeftConnectedVN} -> LeftConnectedVN
-    end.
-
-
-get_right_connected_vn(ThisVN) ->
-    ThisVN ! {get_right_connected_vn, self()},
-    receive
-        {right_connected_vn, RightConnectedVN} -> RightConnectedVN
-    end.
-
-
-get_repr_value_and_vng_name(ThisVN) -> ThisVN ! {get_repr_value_and_vng_name, self()},
-    receive
-        {repr_value_and_vng_name, ReprValue, VNGName} -> {ReprValue, VNGName}
-    end.
-
-
-report_stimulations_count(ThisVN) -> 
-    ThisVN ! {report_stimulations_count, self()},
-    receive
-        {stimulations_count_reported, ThisVN} -> ok;
-        {remove_killed_vn, ReprValue, ThisVN} -> vng:remove_killed_vn(self(), ReprValue, ThisVN)
     end.
 
 
@@ -134,161 +88,196 @@ delete(ThisVN) -> ThisVN ! delete.
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(RepresentedValue, categorical, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+init(VNType, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, #global_cfg{reporter=Reporter} = GlobalCfg) ->
     report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
     process_events(#state{
-        vn_type=categorical, 
+        vn_type=VNType, 
         vng=VNG, 
         vng_name=VNGName, 
-        vng_is_action=VNGIsAction,
-        vng_to_on_conn_count=VNGtoONConnCount,
+        vng_to_on_conn_count=EntireVNGConnCount,
         repr_value=RepresentedValue, 
-        connected_vns=na, 
-        connected_ons=[], 
+        connected_vns=case VNType of categorical -> na; numerical -> {none, none} end,
+        connected_ons=#{}, 
         last_excitation=0.0, 
-        curr_stimulation_id=none,
+        last_stimulation_id=none,
         stimulated_neighs=#{},
-        vng_range=na, 
-        agds=AGDS, 
-        global_cfg=GlobalCfg
-    });
-
-init(RepresentedValue, VNGRange, VNG, VNGName, VNGIsAction, VNGtoONConnCount, AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
-    report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
-    process_events(#state{
-        vn_type=numeric, 
-        vng=VNG, 
-        vng_name=VNGName, 
-        vng_is_action=VNGIsAction,
-        vng_to_on_conn_count=VNGtoONConnCount,
-        repr_value=RepresentedValue, 
-        connected_vns={none, none}, 
-        connected_ons=[], 
-        last_excitation=0.0, 
-        curr_stimulation_id=none,
-        stimulated_neighs=#{},
-        vng_range=VNGRange, 
-        agds=AGDS, 
+        vng_min_value=VNGMinValue,
+        vng_max_value=VNGMaxValue,
         global_cfg=GlobalCfg
     }).
-
 
 
 process_events(#state{
         vn_type=VNType,
         vng=VNG,
         vng_name=VNGName,
-        vng_is_action=VNGIsAction,
-        vng_to_on_conn_count=VNGtoONConnCount,
+        vng_to_on_conn_count=EntireVNGConnCount,
         repr_value=RepresentedValue,
         connected_vns=ConnectedVNs, 
         connected_ons=ConnectedONs, 
         last_excitation=LastExcitation, 
-        curr_stimulation_id=CurrStimulationId,
+        last_stimulation_id=LastStimulationId,
         stimulated_neighs=StimulatedNeighs,
-        vng_range=VNGRange, 
-        agds=AGDS, 
-        global_cfg=#global_cfg{reporter=Reporter, timestep_ms=TimestepMs} = GlobalCfg
-        , dbg_stimulations_count=DbgStimulationsCount
+        vng_min_value=VNGMinValue,
+        vng_max_value=VNGMaxValue,
+        global_cfg=#global_cfg{reporter=Reporter} = GlobalCfg
     } = State) -> 
 
     receive
-        {stimulate, Source, Stimuli, CurrInferenceDepth, MaxInferenceDepth, StimulationKind} ->
-            PassedStimulationId = case StimulationKind of
-                {infere, InferenceId} -> InferenceId;
-                {poison, _DeadlyDose, _MinimumAccumulatedDose, PoisoningId} -> PoisoningId
-            end,
+        {
+            stimulate, 
+            Source, 
+            Stimulus, 
+            CurrDepth, 
+            #stim_spec{
+                id=StimulationId,
+                node_group_modes=NodeGroupModes,
+                min_passed_stimulus=MinPassedStimulus
+            }=StimulationSpec
+        } ->
 
-            dbg_counter:add_stimulations({vn, VNGName}, 1, PassedStimulationId, GlobalCfg#global_cfg.dbg_counter),
+            dbg_counter:add_stimulations({vn, VNGName}, 1, StimulationId, GlobalCfg#global_cfg.dbg_counter),
 
-            CurrExcitation = case PassedStimulationId of
-                CurrStimulationId -> LastExcitation;
+            CurrExcitation = case StimulationId of
+                LastStimulationId -> LastExcitation;
                 _ -> 0.0
             end,
             
-            NewInferenceDepth = CurrInferenceDepth + 1,
-            NewExcitation = CurrExcitation + Stimuli,
-            
-            % case StimulationKind of
-            %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-            %     {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
-            % end,
-            
-            if 
-                NewInferenceDepth < MaxInferenceDepth ->
-                    % timer:sleep(TimestepMs),
+            NewDepth = CurrDepth + 1,
+            NewExcitation = CurrExcitation + Stimulus,  % This line assumes that ONG CANNOT work in responsive mode!
 
-                    StimulatedNeighVNPidsAndValues = case VNType of
+            case maps:get(VNGName, NodeGroupModes) of
+                passive -> 
+                    stimulation:send_stimulation_finished(Source, CurrDepth),
+                    process_events(State#state{last_stimulation_id=StimulationId});
+
+                {responsive, AmplifingFactor} -> 
+                    case Source of
+                        VNG ->
+                            stimulation:send_stimulation_finished(Source, CurrDepth),
+                            process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId});
+                        _ ->
+                            ResStimulus = case AmplifingFactor of
+                                excitation ->
+                                    Stimulus * CurrExcitation;
+                                value ->
+                                    Stimulus * if 
+                                        VNGMaxValue - VNGMinValue == 0.0 -> 1.0;
+                                        true -> (RepresentedValue - VNGMinValue) / (VNGMaxValue - VNGMinValue)
+                                    end
+                                end,
+                                stimulation:respond_to_stimulation(Source, ResStimulus),
+                                process_events(State#state{last_excitation=CurrExcitation, last_stimulation_id=StimulationId})
+                    end;
+
+                CurrVNGMode ->
+                    
+                    % VN -> VN
+                    NeighVNsToStimulate = case VNType of
                         categorical -> [];
-                        numeric -> [Neigh || Neigh <- tuple_to_list(ConnectedVNs), Neigh /= none, element(1, Neigh) /= Source]
+                        numerical -> [Neigh || Neigh <- tuple_to_list(ConnectedVNs), Neigh =/= none, element(1, Neigh) =/= Source]
+                    end,
+
+                    StimulatedVNs = lists:foldl(
+                        fun({VN, NeighValue}, Acc) ->
+                            NeighStimulus = Stimulus * weight_vn_to_vn(NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue),
+                            if 
+                                NeighStimulus >= MinPassedStimulus -> 
+                                    vn:stimulate(VN, NeighStimulus, NewDepth, StimulationSpec),
+                                    [VN | Acc];
+                                true -> Acc
+                            end
+                        end,
+                        [],
+                        NeighVNsToStimulate
+                    ),
+
+                    % VN -> ON
+                    ONStimulus = Stimulus * weight_vn_to_on(ConnectedONs, EntireVNGConnCount),
+
+                    StimulatedONs = case CurrVNGMode of
+                        accumulative -> [];
+                        transitive ->
+                            if
+                                ONStimulus >= MinPassedStimulus -> 
+                                    [ON || ON <- maps:keys(ConnectedONs), ON =/= Source];
+                                true -> []
+                            end
                     end,
                     
-                    StimulatedNeighONPids = lists:delete(Source, ConnectedONs);
+                    lists:foreach(
+                        fun(ON) -> on:stimulate(ON, ONStimulus, NewDepth, StimulationSpec) end, 
+                        StimulatedONs
+                    ),
+
+
+                    % Stimulated neighs
                     
-                true -> 
-                    % case StimulationKind of
-                    %     infere -> report:node_stimulated(self(), NewExcitation, Reporter);
-                    %     {poison, DeadlyDose} -> report:node_poisoned(self(), NewExcitation, DeadlyDose, Reporter)
-                    % end
-                    StimulatedNeighVNPidsAndValues = [],
-                    StimulatedNeighONPids = []
-            end,
+                    NewStimulatedNeighs = case StimulatedONs ++ StimulatedVNs of
+                        [] ->
+                            stimulation:send_stimulation_finished(Source, CurrDepth),
+                            StimulatedNeighs;
+                        
+                        StimulatedONsAndVNs ->
+                            case StimulatedNeighs of
+                                #{NewDepth := {StimulatedNeighsAtDepth, SourcesAtDepth}} -> 
+                                    NewStimulatedNeighsAtDepth = lists:foldl( 
+                                        fun(Neigh, Acc) ->
+                                            case Acc of
+                                                #{Neigh := StimulationCount} -> Acc#{Neigh => StimulationCount + 1};
+                                                _ -> Acc#{Neigh => 1}
+                                            end
+                                        end, 
+                                        StimulatedNeighsAtDepth, 
+                                        StimulatedONsAndVNs
+                                    ),
+                                    NewSourcesAtDepth = case SourcesAtDepth of
+                                        #{Source := SourceStimulationCount} -> SourcesAtDepth#{Source => SourceStimulationCount + 1};
+                                        _ -> SourcesAtDepth#{Source => 1}
+                                    end,
+                                    StimulatedNeighs#{NewDepth => {NewStimulatedNeighsAtDepth, NewSourcesAtDepth}};
+                                    
+                                _ -> 
+                                    StimulatedNeighs#{NewDepth => {
+                                        lists:foldl( fun(Neigh, Acc) -> Acc#{Neigh => 1} end, #{}, StimulatedONsAndVNs),
+                                        #{Source => 1}
+                                    }}
+                            end
+                    end,
 
-            StimulatedVNsAndONs = lists:map(fun({Pid, _Value}) -> Pid end, StimulatedNeighVNPidsAndValues) ++ StimulatedNeighONPids,
-            NewStimulatedNeighs = case StimulatedVNsAndONs of
-                [] -> 
-                    Source ! {stimulation_finished, self(), CurrInferenceDepth}, % TODO: hide message in function, in common "agds_node" module
-                    StimulatedNeighs;
-                _ -> 
-                    case StimulatedNeighs of
-                        #{NewInferenceDepth := {AlreadyStimulatedNeighs, SourcesAtInfDepth}} -> 
-                            #{NewInferenceDepth => {AlreadyStimulatedNeighs ++ StimulatedVNsAndONs, SourcesAtInfDepth ++ [Source]}};
-                        _ -> 
-                            StimulatedNeighs#{NewInferenceDepth => {StimulatedVNsAndONs, [Source]}}
-                    end
-            end,
+                    % io:format(
+                    %     "~s    VN ~p: stimulated nodes ~p, new stimulated neighs: ~p~n", 
+                    %     [utils:get_timestamp_str(), self(), StimulatedONs ++ StimulatedVNs, NewStimulatedNeighs]
+                    % ),
 
-            % agds:notify_node_stimulated(AGDS, length(StimulatedNeighVNPidsAndValues) + length(StimulatedNeighONPids)),
-
-            lists:foreach(
-                fun(VN) -> stimulate_neigh_vn(
-                    VN, RepresentedValue, Stimuli, VNGRange, NewInferenceDepth, MaxInferenceDepth, StimulationKind
-                ) end,
-                StimulatedNeighVNPidsAndValues
-            ),
-
-            ONStimuli = Stimuli * weight_vn_to_on(ConnectedONs, VNGtoONConnCount),
-
-            if 
-                ONStimuli > 0.5 ->
-                    lists:foreach(
-                        fun(ON) -> on:stimulate(ON, self(), ONStimuli, NewInferenceDepth, MaxInferenceDepth, StimulationKind, VNGIsAction) end, 
-                        StimulatedNeighONPids
-                    );
-                true -> 
-                    lists:foreach(
-                        fun(ON) -> self() ! {stimulation_finished, ON, NewInferenceDepth} end, 
-                        StimulatedNeighONPids
-                    )
-            end,
-            
-            process_events(State#state{last_excitation=NewExcitation, curr_stimulation_id=PassedStimulationId, stimulated_neighs=NewStimulatedNeighs, dbg_stimulations_count=DbgStimulationsCount + 1});
+                    % Accumulate
+                    process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId, stimulated_neighs=NewStimulatedNeighs})
+            end;
 
 
-        {stimulation_finished, StimulatedNode, InferenceDepth} ->
-            % io:format("VN(~p,~p) received stimulation finished from ~p at depth ~p, current StimulatedNeighs: ~p~n", [VNGName, RepresentedValue, StimulatedNode, InferenceDepth, StimulatedNeighs]),
+        {stimulation_finished, StimulatedNode, Depth, ConfirmationCount} ->
+            % io:format(
+            %     "~s    VN ~p: stimulation_finished received from ~p at depth: ~p (confirmation count: ~p)~nstimulated neighs: ~p~n", 
+            %     [utils:get_timestamp_str(), self(), StimulatedNode, Depth, ConfirmationCount, StimulatedNeighs]
+            % ),
             NewStimulatedNeighs = case StimulatedNeighs of
-                #{InferenceDepth := {[StimulatedNode], SourcesAtInfDepth}} -> 
-                    lists:foreach(fun(Source) -> Source ! {stimulation_finished, self(), InferenceDepth - 1} end, SourcesAtInfDepth),
-                    maps:remove(InferenceDepth, StimulatedNeighs);
-                #{InferenceDepth := {StimulatedNeighsAtInfDepth, SourcesAtInfDepth}} -> 
-                    StimulatedNeighs#{InferenceDepth => {lists:delete(StimulatedNode, StimulatedNeighsAtInfDepth), SourcesAtInfDepth}}
+                #{Depth := {#{StimulatedNode := ConfirmationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
+                    NewNeighsAtDepth = maps:remove(StimulatedNode, NeighsAtDepth),
+                    if
+                        map_size(NewNeighsAtDepth) == 0 ->
+                            maps:foreach(fun(Source, StimCount) -> stimulation:send_stimulation_finished(Source, Depth - 1, StimCount) end, SourcesAtDepth),
+                            maps:remove(Depth, StimulatedNeighs);
+                        true ->
+                            StimulatedNeighs#{Depth => {NewNeighsAtDepth, SourcesAtDepth}}
+                    end;
+
+                #{Depth := {#{StimulatedNode := StimulationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
+                    StimulatedNeighs#{Depth => {NeighsAtDepth#{StimulatedNode => StimulationCount - ConfirmationCount}, SourcesAtDepth}}
             end,
             process_events(State#state{stimulated_neighs=NewStimulatedNeighs});
 
 
         {connect_VN, NewConnectedVN, ConnectedVNValue} ->
-            % io:format("VNGName: ~p  RepresentedValue: ~p  ConnectedVNValue: ~p~n", [VNGName, RepresentedValue, ConnectedVNValue]),
             if
                 % no need to handle categorical VN case - connect_VN should never be called on such VN
                 ConnectedVNValue < RepresentedValue -> 
@@ -302,12 +291,12 @@ process_events(#state{
             end;
 
 
-        {connect_ON, ON} -> 
-            process_events(State#state{connected_ons=[ON | ConnectedONs]});
+        {connect_ON, ON, ONIndex} -> 
+            process_events(State#state{connected_ons=ConnectedONs#{ON => ONIndex}});
 
 
         {disconnect_ON, ON} ->
-            NewConnectedONs = lists:delete(ON, ConnectedONs),
+            NewConnectedONs = maps:remove(ON, ConnectedONs),
             vng:notify_VNG_to_ON_conn_count_decremented(VNG),
             
             case NewConnectedONs of
@@ -316,7 +305,7 @@ process_events(#state{
 
                     case VNType of
                         categorical -> ok;
-                        numeric ->
+                        numerical ->
                             {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
                             case LeftConnectedVN of
                                 none -> ok;
@@ -329,7 +318,6 @@ process_events(#state{
                     end,
 
                     vng:remove_killed_vn(VNG, RepresentedValue, self()),
-                    % dbg_counter:add_stimulations({vn, VNGName}, DbgStimulationsCount, GlobalCfg#global_cfg.dbg_counter),
                     zombie_wait_for_orphan_stimulations(StimulatedNeighs);
 
                 _ -> process_events(State#state{connected_ons=NewConnectedONs})
@@ -352,63 +340,35 @@ process_events(#state{
             process_events(State#state{connected_vns=NewConnectedVNs});
 
 
-        {update_VNG_range, NewVNGRange} -> 
-            process_events(State#state{vng_range=NewVNGRange});
+        {update_VNG_range, NewVNGMinValue, NewVNGMaxValue} -> 
+            process_events(State#state{vng_min_value=NewVNGMinValue, vng_max_value=NewVNGMaxValue});
 
 
-        {update_VNG_to_ON_conn_count, NewVNGtoONConnCount} ->
-            process_events(State#state{vng_to_on_conn_count=NewVNGtoONConnCount});
+        {update_VNG_to_ON_conn_count, NewEntireVNGConnCount} ->
+            process_events(State#state{vng_to_on_conn_count=NewEntireVNGConnCount});
 
 
-        {get_excitation, Asker, LastStimulationId} -> 
-            Excitation = case LastStimulationId of
-                CurrStimulationId -> LastExcitation;
+        {get_excitation, Asker, LastAgdsStimulationId} -> 
+            % io:format("~s    VN ~p (VNG: ~p): get_excitation received~n", [utils:get_timestamp_str(), VNG, self()]),
+            Excitation = case LastAgdsStimulationId of
+                LastStimulationId -> LastExcitation;
                 _ -> 0.0
             end,
+            % io:format("~s    VN ~p (VNG: ~p): sending {last_excitation, ~p} back~n", [utils:get_timestamp_str(), VNG, self(), Excitation]),
             Asker ! {last_excitation, Excitation},
             process_events(State);
         
 
-        {reset_excitation, Asker} -> 
-            % report:node_stimulated(self(), 0.0, Reporter),
-            Asker ! {reset_excitation_finished, self()},
-            process_events(State#state{last_excitation=0.0});
-
-
         {get_neighbours, Asker} -> 
             NeighbouringVNs = case VNType of
                 categorical -> [];
-                numeric -> 
-                    % VNGName stored in state#{} should be the same as VNG returned by vn:get_repr_value_and_vng_name/1 for any neigh, as only VNs from the same VNG can be neighbours
-                    NeighVNsValues = [vn:get_repr_value_and_vng_name(VN) || {VN, _VNValue} <- tuple_to_list(ConnectedVNs), VN /= none],
-                    [{vn, NeighVNGName, NeighReprValue} || {NeighReprValue, NeighVNGName} <- NeighVNsValues]
+                numerical -> 
+                    NeighVNs = [Neigh || Neigh <- tuple_to_list(ConnectedVNs), Neigh /= none],
+                    [{vn, VNGName, VNValue} || {_VN, VNValue} <- NeighVNs]
             end,
-            NeighbouringONs = [{on, on:get_index(ON)} || ON <- ConnectedONs],
+            NeighbouringONs = [{on, ONIndex} || ONIndex <- maps:values(ConnectedONs)],
             Asker ! {neighbours, NeighbouringVNs ++ NeighbouringONs},
             process_events(State);
-
-
-        {get_left_connected_vn, Asker} ->
-            {LeftConnectedVN, _RightConnectedVN} = ConnectedVNs,
-            Asker ! {left_connected_vn, LeftConnectedVN},
-            process_events(State);
-
-
-        {get_right_connected_vn, Asker} ->
-            {_LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
-            Asker ! {right_connected_vn, RightConnectedVN},
-            process_events(State);
-
-
-        {get_repr_value_and_vng_name, Asker} ->
-            Asker ! {repr_value_and_vng_name, RepresentedValue, VNGName},
-            process_events(State);
-
-        
-        % {report_stimulations_count, Asker} ->
-        %     dbg_counter:add_stimulations({vn, VNGName}, DbgStimulationsCount, GlobalCfg#global_cfg.dbg_counter),
-        %     Asker ! {stimulations_count_reported, self()},
-        %     process_events(State);
 
     
         delete -> ok
@@ -416,19 +376,12 @@ process_events(#state{
     end.
 
 
-% stimulate_neigh_vn(none, _OwnReprValue, _ReceivedStimuli, _VNGRange, _NewInferenceDepth, _MaxInferenceDepth, _StimulationKind) -> noop;
 
-stimulate_neigh_vn({TargetVN, TargetVNReprValue}, OwnReprValue, ReceivedStimuli, VNGRange, NewInferenceDepth, MaxInferenceDepth, StimulationKind) ->
-    StimuliToPass = ReceivedStimuli * (VNGRange - abs(OwnReprValue - TargetVNReprValue)) / VNGRange,
-    if
-        StimuliToPass > 0.3 ->
-            vn:stimulate(TargetVN, self(), StimuliToPass, NewInferenceDepth, MaxInferenceDepth, StimulationKind);
-        true -> 
-            self() ! {stimulation_finished, TargetVN, NewInferenceDepth}
-    end.
+weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
+    1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
 
 
-weight_vn_to_on(ConnectedONs, VNGtoONConnCount) ->
+weight_vn_to_on(ConnectedONs, EntireVNGConnCount) ->
     %% CLASSICAL WEIGHT
     % case length(ConnectedONs) > 0 of
     %     true ->  1 / length(ConnectedONs);
@@ -436,9 +389,12 @@ weight_vn_to_on(ConnectedONs, VNGtoONConnCount) ->
     % end.
     
     %% MODIFIED WEIGHT
+    
+    VNConnCount = maps:size(ConnectedONs),
+
     if 
-        VNGtoONConnCount == length(ConnectedONs) -> 1.0;
-        true -> (VNGtoONConnCount - length(ConnectedONs)) / VNGtoONConnCount
+        EntireVNGConnCount == VNConnCount -> 1.0;
+        true -> (EntireVNGConnCount - maps:size(ConnectedONs)) / EntireVNGConnCount
     end.
 
 
@@ -449,21 +405,25 @@ report_breaking_connection({OldConnectedVN, _OldConnectedVNValue}, NewConnectedV
 report_breaking_connection({OtherVN, _OtherVNValue}, _NewConnectedVN, #global_cfg{reporter=Reporter}) -> report:connection_broken(self(), OtherVN, Reporter).
 
 
-% zombie_wait_for_orphan_stimulations(#{}) -> killed;
-
 zombie_wait_for_orphan_stimulations(StimulatedNeighs) ->
     receive
-        {stimulate, Source, _Stimuli, CurrInferenceDepth, _MaxInferenceDepth, _StimulationKind} ->
-            % agds:notify_node_stimulated(AGDS, 0),
-            Source ! {stimulation_finished, self(), CurrInferenceDepth},
+        {stimulate, Source, _Stimulus, Depth, _StimulationSpec} ->
+            stimulation:send_stimulation_finished(Source, Depth),
             zombie_wait_for_orphan_stimulations(StimulatedNeighs);
-        {stimulation_finished, StimulatedNode, InferenceDepth} -> 
+        {stimulation_finished, StimulatedNode, Depth, ConfirmationCount} -> 
             NewStimulatedNeighs = case StimulatedNeighs of
-                #{InferenceDepth := {[StimulatedNode], SourcesAtInfDepth}} -> 
-                    lists:foreach(fun(Source) -> Source ! {stimulation_finished, self(), InferenceDepth - 1} end, SourcesAtInfDepth),
-                    maps:remove(InferenceDepth, StimulatedNeighs);
-                #{InferenceDepth := {StimulatedNeighsAtInfDepth, SourcesAtInfDepth}} -> 
-                    StimulatedNeighs#{InferenceDepth => {lists:delete(StimulatedNode, StimulatedNeighsAtInfDepth), SourcesAtInfDepth}}
+                #{Depth := {#{StimulatedNode := ConfirmationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
+                    NewNeighsAtDepth = maps:remove(StimulatedNode, NeighsAtDepth),
+                    if
+                        map_size(NewNeighsAtDepth) == 0 ->
+                            maps:foreach(fun(Source, StimCount) -> stimulation:send_stimulation_finished(Source, Depth - 1, StimCount) end, SourcesAtDepth),
+                            maps:remove(Depth, StimulatedNeighs);
+                        true ->
+                            StimulatedNeighs#{Depth => {NewNeighsAtDepth, SourcesAtDepth}}
+                    end;
+
+                #{Depth := {#{StimulatedNode := StimulationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
+                    StimulatedNeighs#{Depth => {NeighsAtDepth#{StimulatedNode => StimulationCount - ConfirmationCount}, SourcesAtDepth}}
             end,
             zombie_wait_for_orphan_stimulations(NewStimulatedNeighs)
     after 5000 -> killed

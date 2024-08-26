@@ -24,7 +24,7 @@ async def run():
 
     reward = None
 
-    for _ in range(4000):
+    for _ in range(10):
         action = (await sarsa_agds.step(observation, reward))[0]
         observation, reward, terminated, truncated, info = env.step(action)
 

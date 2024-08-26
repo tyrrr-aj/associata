@@ -78,12 +78,12 @@ class AgdsLogger:
             case (timestamp_info, Atom('node_stimulated'), (node_id, excitation)):
                 self._observed_graph.add_node_stimulation(node_id, excitation, self._get_timestamp(timestamp_info))
 
-            case (timestamp_info, Atom('node_poisoned'), (node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli)):
+            case (timestamp_info, Atom('node_poisoned'), (node_id, acc_poison_lvl, excitation, stimulus, source_node)):
                 acc_poison_lvl = round(float(acc_poison_lvl), 3)
-                tmp_poison_lvl = round(float(tmp_poison_lvl), 3)
-                tmp_poison_multiplier = round(float(tmp_poison_multiplier), 3)
+                excitation = round(float(excitation), 3)
+                stimulus = round(float(stimulus), 3)
                 
-                self._observed_graph.add_node_poisoning(node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli, self._get_timestamp(timestamp_info))
+                self._observed_graph.add_node_poisoning(node_id, acc_poison_lvl, excitation, stimulus, source_node, self._get_timestamp(timestamp_info))
 
             case (timestamp_info, Atom('node_killed'), (node_id,)):
                 # print(f'Node {node_id} killed')

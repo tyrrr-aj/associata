@@ -155,9 +155,6 @@ class TD_AGDS(TD):
 
     def __init__(self, state_space_feature_names, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1.0, greedey_epsilon=0.1):
         self._state_space_feature_names = state_space_feature_names
-
-        self._inference_depth = 2
-
         super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedey_epsilon=greedey_epsilon)
 
 
@@ -197,16 +194,14 @@ class TD_AGDS(TD):
         for f_name, f_epsilon in zip(self._state_space_feature_names, self._state_space_epsilon):
             await self.q.add_numerical_vng(f_name, f_epsilon)
         await self.q.add_categorical_vng('value')
-        await self.q.add_categorical_vng('action', is_action=True)
+        await self.q.add_categorical_vng('action')
 
 
     async def _update_q(self, next_state, next_action, reward):
         last_sa_value = await self._search_for_action_value(self._last_state, self._last_action)
         updated_last_sa_value = await self._updated_q_value(last_sa_value, next_state, next_action, reward)
         
-        last_sa_search = self._setup_search_from_state(self._last_state)
-        last_sa_search = self._setup_search_from_action(self._last_action, last_sa_search)
-        await self.q.poison(last_sa_search, self._inference_depth, 3.0, 1.1)     # TODO: Adjust depth and deadly dose
+        await self._poison(self._last_state, self._last_action)
 
         # TODO: handles only one-dimensional action space
         # TODO: handles only float values for VNGs
@@ -218,42 +213,72 @@ class TD_AGDS(TD):
 
 
     async def _search_for_action_value(self, state, action):
-        sa_value_search = self._setup_search_from_state(state)
-        sa_value_search = self._setup_search_from_action(action, sa_value_search)
-        sa_value = await self._infere_and_get_max_from_vng('value', sa_value_search, self._inference_depth)
+        sa_value_search = self._setup_search_from_state(
+            state,
+            ong_mode=associata.NodeGroupMode.transitive,
+            action_mode=associata.NodeGroupMode.responsive_exciation,
+            value_mode=associata.NodeGroupMode.accumulative
+        )
+        sa_value_search = self._add_search_from_action(action, sa_value_search)
+        sa_value = await self._infere_and_get_max_from_vng('value', sa_value_search, 0.5)   # HYPERPARAM: min_passed_stimulus
 
         return float(sa_value) if sa_value is not None else 0.0
 
 
     async def _search_for_best_action(self, state):
-        best_action_search = self._setup_search_from_state(state)
-        best_action_search.stimulate_vng_with_repr_values('value')
+        best_action_search = self._setup_search_from_state(
+            state,
+            ong_mode=associata.NodeGroupMode.transitive,
+            action_mode=associata.NodeGroupMode.accumulative,
+            value_mode=associata.NodeGroupMode.responsive_value
+        )
 
-        return await self._infere_and_get_max_from_ong(best_action_search, self._inference_depth)
+        return await self._infere_and_get_max_from_ong(best_action_search, 0.5) # HYPERPARAM: min_passed_stimulus
+    
+
+    async def _poison(self, state, action):
+        last_sa_search = self._setup_search_from_state(
+            state,
+            ong_mode=associata.NodeGroupMode.accumulative, 
+            action_mode=associata.NodeGroupMode.responsive_exciation, 
+            value_mode=associata.NodeGroupMode.passive
+        )
+        last_sa_search = self._add_search_from_action(action, last_sa_search)
+
+        await self.q.poison(last_sa_search, 0.5, 3.0, 1.1)     # HYPERPARAM: min_passed_stimulus, deadly_dose, min_acc_dose
 
 
-    def _setup_search_from_state(self, state, search=None):
-        search = associata.InferenceSetup() if search is None else search
+    def _setup_search_from_state(self, state, ong_mode, action_mode, value_mode):
+        node_group_modes = {
+            'ong': ong_mode,
+            'value': value_mode,
+            'action': action_mode,
+        } | {
+            feature_name: associata.NodeGroupMode.transitive for feature_name in self._state_space_feature_names
+        }
+        
+        search = associata.StimulationSetup(node_group_modes)
+        
         for f_name, f_value in zip(self._state_space_feature_names, state):
             search.stimulate_vn(f_name, f_value)
+        
         return search
     
 
-    def _setup_search_from_action(self, action, search=None):
-        search = associata.InferenceSetup() if search is None else search
+    def _add_search_from_action(self, action, search):
         search.stimulate_vn('action', action[0])    # TODO: handles only one-dimensional action space
         return search
     
     
-    async def _infere_and_get_max_from_vng(self, vng_name, setup, depth):
-        await self.q.infere(setup, depth)
+    async def _infere_and_get_max_from_vng(self, vng_name, setup, min_passed_stimulus):
+        await self.q.infere(setup, min_passed_stimulus)
         excitations = await self.q.get_excitations_for_vng(vng_name)
 
         return self._get_maximizing_key(excitations)
     
 
-    async def _infere_and_get_max_from_ong(self, setup, depth):
-        await self.q.infere(setup, depth)
+    async def _infere_and_get_max_from_ong(self, setup, min_passed_stimulus):
+        await self.q.infere(setup, min_passed_stimulus)
         excitations = await self.q.get_excitations_for_ong()
 
         return self._get_maximizing_key(excitations)

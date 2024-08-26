@@ -7,6 +7,8 @@ import uuid
 import parse
 import os
 import asyncio
+from enum import Enum
+import datetime
 
 
 
@@ -155,78 +157,73 @@ class AGDS(AAS):
         self._poisoning_timeout_sec = 5
         self._query_timeout_sec = 5
 
-    async def add_numerical_vng(self, name, epsilon, is_action=False):
+    async def add_numerical_vng(self, name, epsilon):
         await self._channel.send_backend_async((
             Atom('add_vng'), 
             name, 
             Atom('numerical'), 
             float(epsilon), 
-            is_action))
+        ))
 
-    async def add_categorical_vng(self, name, is_action=False):
+    async def add_categorical_vng(self, name):
         await self._channel.send_backend_async((
             Atom('add_vng'), 
             name, 
             Atom('categorical'), 
-            is_action))
+        ))
 
     async def add_observation(self, vng_values):
         add_observation_cmd = (Atom('add_observation'), vng_values)
         # print(f'Adding observation: {add_observation_cmd}')
         await self._channel.send_backend_async(add_observation_cmd)
     
-    async def infere(self, inference_setup, max_depth):
-        # await self.reset_excitation()
+    async def infere(self, inference_setup, min_passed_stimulus):
         self._stimulated = True
-        # print(f'sending inference: {inference_setup.get_entries()}')
-        await self._channel.send_backend_async((Atom('infere'), inference_setup.get_entries(), max_depth))
-        # print('waiting for inference response')
+        # print(f'{timestamp_str()}    sending inference: {inference_setup.get_entries()}')
+        # print(f'{timestamp_str()}    sending inference: {(Atom("infere"), inference_setup.get_entries(), inference_setup.get_modes_repr(), min_passed_stimulus)}')
+        await self._channel.send_backend_async((Atom('infere'), inference_setup.get_entries(), inference_setup.get_modes_repr(), min_passed_stimulus))
+        # print(f'{timestamp_str()}    waiting for inference response')
         await self._channel.receive_async(self._inference_timeout_sec)    # 'inference_finished'
-        # print(f'inference finished')
+        # print(f'{timestamp_str()}    inference finished')
 
-    async def poison(self, inference_setup, max_depth, deadly_dose, min_acc_dose):
-        # await self.reset_excitation()
+    async def poison(self, inference_setup, min_passed_stimulus, deadly_dose, min_acc_dose):
         self._stimulated = True
-        # print(f'sending poison: {inference_setup.get_entries()}')
+        # print(f'{timestamp_str()}    sending poison: {inference_setup.get_entries()}')
+        # print(f'{timestamp_str()}    sending poison: {(Atom("poison"), inference_setup.get_entries(), inference_setup.get_modes_repr(), min_passed_stimulus, float(deadly_dose), float(min_acc_dose))}')
         await self._channel.send_backend_async((
             Atom('poison'), 
             inference_setup.get_entries(), 
-            max_depth, 
+            inference_setup.get_modes_repr(), 
+            min_passed_stimulus,
             float(deadly_dose), 
             float(min_acc_dose)))
-        # print('waiting for poisoning response')
+        # print(f'{timestamp_str()}    waiting for poisoning response')
         await self._channel.receive_async(self._poisoning_timeout_sec)    # 'poisoning_finished'
-        # print(f'poisoning finished')
-
-    async def reset_excitation(self):
-        if self._stimulated:
-            self._stimulated = False
-            await self._channel.send_backend_async(Atom('reset_excitation'))
-            await self._channel.receive_async(self._query_timeout_sec)    # excitation_reset_finished
+        # print(f'{timestamp_str()}    poisoning finished')
 
     async def get_excitations_for_vng(self, vng_name):
-        # print(f'getting excitations for vng: {vng_name}')
+        # print(f'{timestamp_str()}    getting excitations for vng: {vng_name}')
         exc = await self._query_backend((Atom('get_excitation'), Atom('vng'), vng_name), self._parse_excitation_response)
-        # print(f'got excitations for vng {vng_name}: {exc}')
+        # print(f'{timestamp_str()}    got excitations for vng {vng_name}: {exc}')
         return exc
 
 
     async def get_excitations_for_ong(self):
-        # print('getting excitations for ong')
+        # print(f'{timestamp_str()}    getting excitations for ong')
         exc = await self._query_backend((Atom('get_excitation'), Atom('ong')), self._parse_excitation_response)
-        # print(f'got excitations for ong: {exc}')
+        # print(f'{timestamp_str()}    got excitations for ong: {exc}')
         return exc
 
     async def get_vn_neighbours(self, vng_name, vn_value):
-        # print(f'getting neighbours for vn: {vng_name}={vn_value}')
+        # print(f'{timestamp_str()}    getting neighbours for vn: {vng_name}={vn_value}')
         neighs = await self._query_backend((Atom('get_neighbours'), Atom('vn'), vng_name, float(vn_value)), self._parse_neighbours_response)
-        # print(f'got neighbours for vn {vng_name}={vn_value}: {neighs}')
+        # print(f'{timestamp_str()}    got neighbours for vn {vng_name}={vn_value}: {neighs}')
         return neighs
     
     async def get_on_neighbours(self, on_index):
-        # print(f'getting neighbours for on: {on_index}')
+        # print(f'{timestamp_str()}    getting neighbours for on: {on_index}')
         neighs = await self._query_backend((Atom('get_neighbours'), Atom('on'), on_index), self._parse_neighbours_response)
-        # print(f'got neighbours for on {on_index}: {neighs}')
+        # print(f'{timestamp_str()}    got neighbours for on {on_index}: {neighs}')
         return neighs
         
 
@@ -252,27 +249,75 @@ class AGDS(AAS):
 
 
 
-class InferenceSetup:
-    def __init__(self):
+class StimulationSetup:
+    """
+    Class representing the setup for stimulation.
+    Attributes:
+        stimulated_vns (dict): A dictionary containing the stimulated virtual neurons and their stimuli.
+        stimulated_ons (dict): A dictionary containing the stimulated output neurons and their stimuli.
+        node_group_modes (dict): A dictionary containing the modes of the node groups. It must be exhaustive, i.e. all VNGs and an ONG must be present.
+    """
+        
+    def __init__(self, node_group_modes):
         self.stimulated_vns = {}
         self.stimulated_ons = {}
-        self.vngs_stimulated_with_repr_values = []
+        self.node_group_modes = node_group_modes
 
-    def stimulate_vn(self, vng_name, value, stimuli=1.0):
-        self.stimulated_vns[(vng_name, value)] = stimuli
+    """
+    Stimulates a value neuron with the given name, value, and stimulus.
+    Args:
+        vng_name (str): The name of the value neuron group.
+        value: The value of the value neuron.
+        stimulus (float): The stimulus strength (default is 1.0).
+    """
+    def stimulate_vn(self, vng_name, value, stimulus=1.0):
+        self.stimulated_vns[(vng_name, value)] = stimulus
+        return self
         
-    def stimulate_on(self, on_index, stimuli=1.0):
-        self.stimulated_ons[on_index] = stimuli
+    """
+    Stimulates an object neuron with the given index and stimulus.
+    Args:
+        on_index: The index of the object neuron.
+        stimulus (float): The stimulus strength (default is 1.0).
+    """
+    def stimulate_on(self, on_index, stimulus=1.0):
+        self.stimulated_ons[on_index] = stimulus
+        return self
 
-    def stimulate_vng_with_repr_values(self, vng_name):
-        self.vngs_stimulated_with_repr_values.append(vng_name)
-
+    """
+    Returns a dictionary containing the entries of the stimulated virtual neurons, output neurons, and node group representations.
+    Returns:
+        dict: A dictionary containing the entries.
+    """
     def get_entries(self):
         vn_entries = {(Atom('vn'), vng, float(value)) : stimuli for (vng, value), stimuli in self.stimulated_vns.items()}
         on_entries = {(Atom('on'), index) : stimuli for index, stimuli in self.stimulated_ons.items()}
-        vng_repr_entries = {(Atom('vng'), vng) : Atom('repr_value') for vng in self.vngs_stimulated_with_repr_values}
 
-        return vn_entries | on_entries | vng_repr_entries
+        return vn_entries | on_entries
+    
+    """
+    Returns a dictionary containing the representations of the node group modes.
+    Returns:
+        dict: A dictionary containing the representations.
+    """
+    def get_modes_repr(self):
+        representations = {
+            NodeGroupMode.transitive: Atom('transitive'),
+            NodeGroupMode.accumulative: Atom('accumulative'),
+            NodeGroupMode.passive: Atom('passive'),
+            NodeGroupMode.responsive_exciation: (Atom('responsive'), Atom('excitation')),
+            NodeGroupMode.responsive_value: (Atom('responsive'), Atom('value'))
+        }
+
+        return {node_group_name: representations[mode] for node_group_name, mode in self.node_group_modes.items()}
+    
+
+class NodeGroupMode(Enum):
+    transitive = 1,
+    accumulative = 2,
+    passive = 3,
+    responsive_exciation = 4,
+    responsive_value = 5
     
 
 
@@ -390,3 +435,7 @@ def _print_subprocess_output(subproc, name):
 #########################################################
         
 # atexit.register(stop)
+
+
+def timestamp_str():
+    return datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')

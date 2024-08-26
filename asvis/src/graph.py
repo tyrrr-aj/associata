@@ -33,7 +33,7 @@ class Graph:
         self._close_attribute_time_range(node_id, 'excitation', timestamp)      # first range is opened at node creation time
         self._add_timeframed_node_attribute_value(node_id, 'excitation', excitation, timestamp)
 
-    def add_node_poisoning(self, node_id, acc_poison_lvl, tmp_poison_lvl, tmp_poison_multiplier, source_node, stimuli, timestamp):
+    def add_node_poisoning(self, node_id, acc_poison_lvl, tmp_poison_lvl, stimulus, source_node, timestamp):
         if acc_poison_lvl != self._get_last_attr_value(node_id, 'acc_poison_lvl'):
             self._close_attribute_time_range(node_id, 'acc_poison_lvl', timestamp)      # first range is opened at node creation time
             self._add_timeframed_node_attribute_value(node_id, 'acc_poison_lvl', acc_poison_lvl, timestamp)
@@ -41,12 +41,8 @@ class Graph:
         if tmp_poison_lvl != self._get_last_attr_value(node_id, 'tmp_poison_lvl'):
             self._close_attribute_time_range(node_id, 'tmp_poison_lvl', timestamp)
             self._add_timeframed_node_attribute_value(node_id, 'tmp_poison_lvl', tmp_poison_lvl, timestamp)
-
-        if tmp_poison_multiplier != self._get_last_attr_value(node_id, 'tmp_poison_multiplier'):
-            self._close_attribute_time_range(node_id, 'tmp_poison_multiplier', timestamp)
-            self._add_timeframed_node_attribute_value(node_id, 'tmp_poison_multiplier', tmp_poison_multiplier, timestamp)
         
-        self._add_timeframed_edge_attribute_value(source_node, node_id, 'poison_passed', stimuli, timestamp)
+        self._add_timeframed_edge_attribute_value(source_node, node_id, 'poison_passed', stimulus, timestamp)
 
 
     def add_node_killing(self, node_id, timestamp):

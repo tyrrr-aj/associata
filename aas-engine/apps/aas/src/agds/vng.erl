@@ -1,43 +1,37 @@
 -module(vng).
--export([create_numerical_VNG/5, create_categorical_VNG/4, add_value/3, stimulate/4, reset_excitation/1, wait_for_reset_excitation/1, get_excitation/2, get_neighbours/2, delete/1]).
+-export([create_numerical_VNG/4, create_categorical_VNG/3, add_value/4, stimulate/3, get_excitation/2, get_neighbours/2, delete/1]).
 -export([remove_killed_vn/3, notify_VNG_to_ON_conn_count_incremented/1, notify_VNG_to_ON_conn_count_decremented/1]).
 
 -include("config.hrl").
+-include("stimulation.hrl").
 -include("../generic/avb_tree.hrl").
 
--record(state, {vng_type, vng_name, is_action, vns, min_value, max_value, all_vns_set, vng_to_on_conn_count, stimulated_vns, agds, global_cfg}).
+-record(state, {
+    vng_type,               % categorical | numerical
+    vng_name,               % string
+    vns,                    % #{repr_value := pid} | avb_tree:tree()
+    min_value,              % float
+    max_value,              % float
+    all_vns_set,            % sets:set()
+    vng_to_on_conn_count,   % integer
+    stimulated_vns,         % sets:set()
+    agds,                   % pid
+    global_cfg              % #global_cfg{}
+}).
 
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
 
-create_numerical_VNG(VNGName, Epsilon, IsAction, AGDS, GlobalCfg) -> spawn(fun() -> init(numerical, VNGName, Epsilon, IsAction, AGDS, GlobalCfg) end).
+create_numerical_VNG(VNGName, Epsilon, AGDS, GlobalCfg) -> spawn(fun() -> init(numerical, VNGName, Epsilon, AGDS, GlobalCfg) end).
 
-create_categorical_VNG(VNGName, IsAction, AGDS, GlobalCfg) -> spawn(fun() -> init(categorical, VNGName, no_epsilon, IsAction, AGDS, GlobalCfg) end).
-
-
-add_value(VNG, AddedValue, RespectiveON) -> VNG ! {add_value, AddedValue, RespectiveON}.
+create_categorical_VNG(VNGName, AGDS, GlobalCfg) -> spawn(fun() -> init(categorical, VNGName, no_epsilon, AGDS, GlobalCfg) end).
 
 
+add_value(VNG, AddedValue, RespectiveON, RespectiveONIndex) -> VNG ! {add_value, AddedValue, RespectiveON, RespectiveONIndex}.
 
-% stimulate(VNG, all, repr_value, MaxDepth, StimulationKind) -> 
-%     VNG ! {stimulate, all, repr_value, MaxDepth, StimulationKind, self()},
-%     receive
-%         {n_stimulated_nodes, NStimulatedNodes} -> NStimulatedNodes
-%     end;
 
-% Value - value observed on receptor, Stimulation - strength of stimulation, StimulationKind - infere | {poison, DeadlyDose}
-% stimulate(VNG, Value, Stimulation, MaxDepth, StimulationKind) -> 
-%     VNG ! {stimulate, Value, Stimulation, MaxDepth, StimulationKind, self()},
-%     receive
-%         {n_stimulated_nodes, NStimulatedNodes} -> NStimulatedNodes
-%     end.
-
-% NEW VERSION: with recursive stimulation_finished gathering, requires all stimulations for VNG to be passed at once
-stimulate(VNG, all_repr_value, MaxDepth, StimulationKind) -> 
-    VNG ! {stimulate, all_repr_value, MaxDepth, StimulationKind};
-
-stimulate(VNG, Stimulations, MaxDepth, StimulationKind) -> 
-    VNG ! {stimulate, Stimulations, MaxDepth, StimulationKind}.
+stimulate(VNG, Stimuli, StimulationSpec) -> 
+    VNG ! {stimulate, Stimuli, StimulationSpec}.
 
 
 
@@ -45,15 +39,6 @@ get_excitation(VNG, LastStimulationId) ->
     VNG ! {get_excitation, self(), LastStimulationId}, 
     receive 
         {vns_excitation, VNsExcitation} -> VNsExcitation
-    end.
-
-
-reset_excitation(VNG) -> 
-    VNG ! {reset_excitation, self()}.
-
-wait_for_reset_excitation(VNG) ->
-    receive
-        {reset_excitation_finished, VNG} -> ok
     end.
 
 
@@ -77,15 +62,14 @@ delete(VNG) -> VNG ! delete.
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(categorical, VNGName, no_epsilon, IsAction, AGDS, GlobalCfg) ->
+init(categorical, VNGName, no_epsilon, AGDS, GlobalCfg) ->
     report_vng_creation(categorical, VNGName, GlobalCfg),
     process_events(#state{
         vng_type=categorical, 
         vng_name=VNGName, 
-        is_action=IsAction, 
         vns=#{}, 
-        min_value=na, 
-        max_value=na, 
+        min_value=none, 
+        max_value=none, 
         all_vns_set=sets:new(), 
         vng_to_on_conn_count=0, 
         stimulated_vns=sets:new(),
@@ -93,12 +77,11 @@ init(categorical, VNGName, no_epsilon, IsAction, AGDS, GlobalCfg) ->
         global_cfg=GlobalCfg
     });
 
-init(numerical, VNGName, Epsilon, IsAction, AGDS, GlobalCfg) ->
+init(numerical, VNGName, Epsilon, AGDS, GlobalCfg) ->
     report_vng_creation(numerical, VNGName, GlobalCfg),
     process_events(#state{
         vng_type=numerical, 
         vng_name=VNGName, 
-        is_action=IsAction, 
         vns=avb_tree:create(Epsilon), 
         min_value=none, 
         max_value=none, 
@@ -118,7 +101,6 @@ report_vng_creation(VNGType, VNGName, #global_cfg{reporter=Reporter}) ->
 process_events(#state{
     vng_type=VNGType, 
     vng_name=VNGName, 
-    is_action=IsAction, 
     vns=VNs, 
     min_value=MinValue, 
     max_value=MaxValue, 
@@ -130,33 +112,29 @@ process_events(#state{
 } = State) ->
 
     receive
-        {add_value, AddedValue, RespectiveON} ->
+        {add_value, AddedValue, RespectiveON, RespectiveONIndex} ->
+            if
+                MinValue =:= none, MaxValue =:= none -> NewMinValue = AddedValue, NewMaxValue = AddedValue;
+                AddedValue < MinValue -> NewMinValue = AddedValue, NewMaxValue = MaxValue, update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue);
+                AddedValue > MaxValue -> NewMinValue = MinValue, NewMaxValue = AddedValue, update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue);
+                true -> NewMinValue = MinValue, NewMaxValue = MaxValue
+            end,
+
             case VNGType of
                 categorical -> 
                     case maps:find(AddedValue, VNs) of
                         {ok, VN} -> NewVNs = VNs;
                         error -> 
-                            VN = vn:create_VN(AddedValue, categorical, VNGName, IsAction, self(), VNGtoONConnCount, AGDS, GlobalCfg),
+                            VN = vn:create_VN(categorical, AddedValue, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, GlobalCfg),
                             NewVNs = VNs#{AddedValue => VN}
-                    end,
-
-                    NewMinValue = MinValue, NewMaxValue = MaxValue;
+                    end;
                 
                 numerical -> 
-                    if
-                        MinValue == none, MaxValue == none -> NewMinValue = AddedValue, NewMaxValue = AddedValue;
-                        AddedValue < MinValue -> NewMinValue = AddedValue, NewMaxValue = MaxValue, update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue);
-                        AddedValue > MaxValue -> NewMinValue = MinValue, NewMaxValue = AddedValue, update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue);
-                        true -> NewMinValue = MinValue, NewMaxValue = MaxValue
-                    end,
-
-                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(AddedValue, vng_range(NewMinValue, NewMaxValue), VNGName, IsAction, self(), VNGtoONConnCount, AGDS, GlobalCfg) end),
+                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(numerical, AddedValue, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, GlobalCfg) end),
                         
                     case IsNew of
                         new_value ->
                             Neighs = avb_tree:get_neighbours(NewVNs, AddedValue),
-
-                            % io:format("VNG: ~p  AddedValue: ~p  Neighs: ~p  Tree: ~p~n", [VNGName, AddedValue, Neighs, NewVNs]),
 
                             lists:foreach(
                                 fun(Neigh) -> case Neigh of
@@ -174,8 +152,8 @@ process_events(#state{
                     end
             end,
 
-            vn:connect_ON(VN, RespectiveON),
-            on:connect_VN(RespectiveON, VN),
+            vn:connect_ON(VN, RespectiveON, RespectiveONIndex),
+            on:connect_VN(RespectiveON, VN, AddedValue, VNGName),
             report:connection_formed(VN, RespectiveON, Reporter),
 
             NewAllVNsSet = sets:add_element(VN, AllVNsSet),
@@ -186,122 +164,65 @@ process_events(#state{
             process_events(State#state{vns=NewVNs, min_value=NewMinValue, max_value=NewMaxValue, all_vns_set=NewAllVNsSet, vng_to_on_conn_count=NewVNGtoONConnCount});
 
 
-        % {stimulate, all, repr_value, MaxDepth, StimulationKind, Caller} ->
-        %     Caller ! {n_stimulated_nodes, sets:size(AllVNsSet)},
+        {stimulate, Stimuli, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec} ->
+            case maps:get(VNGName, NodeGroupModes) of
+                passive -> 
+                    stimulation:send_stimulation_finished(AGDS, 0),
+                    process_events(State);
 
-        %     case VNGType of
-        %         categorical -> lists:foreach(fun({Value, VN}) -> vn:stimulate(VN, self(), stimuli_proportional_to_vn_repr_value(Value, MinValue, MaxValue), 0, MaxDepth, StimulationKind) end, maps:to_list(VNs));
-        %         numerical -> avb_tree:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), stimuli_proportional_to_vn_repr_value(Value, MinValue, MaxValue), 0, MaxDepth, StimulationKind) end, VNs)
-        %     end,
-
-        %     process_events(State);
-
-        % {stimulate, Value, Stimulation, MaxDepth, StimulationKind, Caller} ->
-        %     case VNGType of
-        %         categorical ->
-        %             case maps:find(Value, VNs) of
-        %                 {ok, VN} -> 
-        %                     Caller ! {n_stimulated_nodes, 1},
-        %                     vn:stimulate(VN, self(), Stimulation, 0, MaxDepth, StimulationKind);
-        %                 error -> 
-        %                     Caller ! {n_stimulated_nodes, 0}
-        %             end;
-
-        %         numerical ->
-        %             case avb_tree:get_nearest(VNs, Value) of
-        %                 {exact_match, VN} -> 
-        %                     Caller ! {n_stimulated_nodes, 1},
-        %                     vn:stimulate(VN, self(), Stimulation, 0, MaxDepth, StimulationKind);
-        %                 {none, none} -> 
-        %                     Caller ! {n_stimulated_nodes, 0};
-        %                 {LeftNeigh, RightNeigh} ->
-        %                     if 
-        %                         LeftNeigh /= none andalso RightNeigh /= none -> Caller ! {n_stimulated_nodes, 2};
-        %                         true -> Caller ! {n_stimulated_nodes, 1}
-        %                     end,
-
-        %                     case LeftNeigh of
-        %                         none -> ok;
-        %                         {LeftVNValue, LeftVN} -> 
-        %                             vn:stimulate(LeftVN, self(), get_nearby_VN_stimuli(Value, LeftVNValue, vng_range(MinValue, MaxValue), Stimulation), 0, MaxDepth, StimulationKind)
-        %                     end,
-        %                     case RightNeigh of
-        %                         none -> ok;
-        %                         {RightVNValue, RightVN} -> 
-        %                             vn:stimulate(RightVN, self(), get_nearby_VN_stimuli(Value, RightVNValue, vng_range(MinValue, MaxValue), Stimulation), 0, MaxDepth, StimulationKind)
-        %                     end
-        %             end
-        %     end,
-
-        %     process_events(State);
+                _ -> 
+                    case VNGType of
+                        categorical ->
+                            NewStimulatedVNs = maps:fold(fun(Value, Stimulus, Acc) ->
+                                case maps:find(Value, VNs) of
+                                    {ok, VN} -> 
+                                        vn:stimulate(VN, Stimulus, 0, StimulationSpec),
+                                        sets:add_element(VN, Acc);
+                                    error -> 
+                                        Acc
+                                end
+                            end, sets:new(), Stimuli);
         
-        % NEW VERSION
-        {stimulate, all_repr_value, MaxDepth, StimulationKind} ->
-            case VNGType of
-                categorical -> maps:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), stimuli_proportional_to_vn_repr_value(Value, MinValue, MaxValue), 0, MaxDepth, StimulationKind) end, VNs);
-                numerical -> avb_tree:foreach(fun(Value, VN) -> vn:stimulate(VN, self(), stimuli_proportional_to_vn_repr_value(Value, MinValue, MaxValue), 0, MaxDepth, StimulationKind) end, VNs)
-            end,
+                        numerical ->
+                            NewStimulatedVNs = maps:fold(fun (Value, Stimulus, Acc) ->
+                                case avb_tree:get_nearest(VNs, Value) of
+                                    {exact_match, VN} -> 
+                                        vn:stimulate(VN, Stimulus, 0, StimulationSpec),
+                                        sets:add_element(VN, Acc);
+                                    {none, none} -> 
+                                        Acc;
+                                    {LeftNeigh, RightNeigh} ->
+                                        NewAccL = case LeftNeigh of
+                                            none -> sets:new();
+                                            {LeftVNValue, LeftVN} -> 
+                                                vn:stimulate(LeftVN, get_nearby_VN_stimulus(Value, LeftVNValue, MinValue, MaxValue, Stimulus), 0, StimulationSpec),
+                                                sets:from_list([LeftVN])
+                                        end,
+                                        NewAccR = case RightNeigh of
+                                            none -> sets:new();
+                                            {RightVNValue, RightVN} -> 
+                                                vn:stimulate(RightVN, get_nearby_VN_stimulus(Value, RightVNValue, MinValue, MaxValue, Stimulus), 0, StimulationSpec),
+                                                sets:from_list([RightVN])
+                                        end,
+                                        sets:union(NewAccL, sets:union(NewAccR, Acc))
+                                end
+                            end, sets:new(), Stimuli)
+                    end,
+        
+                    case sets:is_empty(NewStimulatedVNs) of
+                        true -> stimulation:send_stimulation_finished(AGDS, 0);
+                        false -> ok
+                    end,
+        
+                    process_events(State#state{stimulated_vns=NewStimulatedVNs})
+            end;
 
-            NewStimulatedVNs = AllVNsSet,
 
-            case sets:is_empty(NewStimulatedVNs) of
-                true -> 
-                    AGDS ! {stimulation_finished, self()};
-                false -> ok
-            end,
-
-            process_events(State#state{stimulated_vns=NewStimulatedVNs});
-
-        {stimulate, Stimulations, MaxDepth, StimulationKind} ->
-            case VNGType of
-                categorical ->
-                    NewStimulatedVNs = maps:fold(fun(Value, Stimulation, Acc) ->
-                        case maps:find(Value, VNs) of
-                            {ok, VN} -> 
-                                vn:stimulate(VN, self(), Stimulation, 0, MaxDepth, StimulationKind),
-                                sets:add_element(VN, Acc);
-                            error -> 
-                                Acc
-                        end
-                    end, sets:new(), Stimulations);
-
-                numerical ->
-                    NewStimulatedVNs = maps:fold(fun (Value, Stimulation, Acc) ->
-                        case avb_tree:get_nearest(VNs, Value) of
-                            {exact_match, VN} -> 
-                                vn:stimulate(VN, self(), Stimulation, 0, MaxDepth, StimulationKind),
-                                sets:add_element(VN, Acc);
-                            {none, none} -> 
-                                Acc;
-                            {LeftNeigh, RightNeigh} ->
-                                NewAccL = case LeftNeigh of
-                                    none -> sets:new();
-                                    {LeftVNValue, LeftVN} -> 
-                                        vn:stimulate(LeftVN, self(), get_nearby_VN_stimuli(Value, LeftVNValue, vng_range(MinValue, MaxValue), Stimulation), 0, MaxDepth, StimulationKind),
-                                        sets:from_list([LeftVN])
-                                end,
-                                NewAccR = case RightNeigh of
-                                    none -> sets:new();
-                                    {RightVNValue, RightVN} -> 
-                                        vn:stimulate(RightVN, self(), get_nearby_VN_stimuli(Value, RightVNValue, vng_range(MinValue, MaxValue), Stimulation), 0, MaxDepth, StimulationKind),
-                                        sets:from_list([RightVN])
-                                end,
-                                sets:union(NewAccL, sets:union(NewAccR, Acc))
-                        end
-                    end, sets:new(), Stimulations)
-            end,
-
-            case sets:is_empty(NewStimulatedVNs) of
-                true -> AGDS ! {stimulation_finished, self()};
-                false -> ok
-            end,
-
-            process_events(State#state{stimulated_vns=NewStimulatedVNs});
-
-        {stimulation_finished, StimulatedVN, 0} ->
+        {stimulation_finished, StimulatedVN, 0, 1} ->
+            % io:format("~s    VNG ~p: sitmulation_finished received from ~p, stimulated vns: ~p~n", [utils:get_timestamp_str(), VNGName, StimulatedVN, sets:to_list(StimulatedVNs)]),
             NewStimulatedVNs = sets:del_element(StimulatedVN, StimulatedVNs),
             case sets:is_empty(NewStimulatedVNs) of
-                true -> AGDS ! {stimulation_finished, self()};
+                true -> stimulation:send_stimulation_finished(AGDS, 0);
                 false -> ok
             end,
             process_events(State#state{stimulated_vns=NewStimulatedVNs});
@@ -315,19 +236,6 @@ process_events(#state{
 
             VNsExcitation = maps:filter(fun(_ReprValue, Exc) -> Exc /= none end, VNsResponses),
             Caller ! {vns_excitation, VNsExcitation},
-            process_events(State);
-
-
-        {reset_excitation, Asker} ->
-            case VNGType of
-                categorical -> 
-                    maps:foreach(fun(_Value, VN) -> vn:reset_excitation(VN) end, VNs),
-                    maps:foreach(fun(_Value, VN) -> vn:wait_for_reset_excitation(VN) end, VNs);
-                numerical -> 
-                    avb_tree:foreach(fun(_Value, VN) -> vn:reset_excitation(VN) end, VNs),
-                    avb_tree:foreach(fun(_Value, VN) -> vn:wait_for_reset_excitation(VN) end, VNs)
-            end,
-            Asker ! {reset_excitation_finished, self()},
             process_events(State);
 
 
@@ -381,15 +289,6 @@ process_events(#state{
             process_events(State#state{vng_to_on_conn_count=VNGtoONConnCount - 1});
 
 
-        % {report_stimulations_count, Asker} ->
-        %     case VNGType of
-        %         categorical -> maps:foreach(fun(_Value, VN) -> vn:report_stimulations_count(VN) end, VNs);
-        %         numerical -> avb_tree:foreach(fun(_Value, VN) -> vn:report_stimulations_count(VN) end, VNs)
-        %     end,
-        %     Asker ! {stimulations_count_reported, self()},
-        %     process_events(State);
-
-
         delete ->
             case VNGType of
                 categorical -> maps:foreach(fun(_Value, VN) -> vn:delete(VN) end, VNs);
@@ -407,21 +306,12 @@ vng_range(MinValue, MaxValue) -> MaxValue - MinValue.
 
 
 update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue) ->
-    lists:foreach(fun(VN) -> vn:update_VNG_range(VN, vng_range(NewMinValue, NewMaxValue)) end, sets:to_list(AllVNsSet)).
+    lists:foreach(fun(VN) -> vn:update_VNG_range(VN, NewMinValue, NewMaxValue) end, sets:to_list(AllVNsSet)).
 
 
 update_VNG_to_ON_conn_count(AllVNsSet, NewVNGtoONConnCount) ->
     lists:foreach(fun(VN) -> vn:update_VNG_to_ON_conn_count(VN, NewVNGtoONConnCount) end, sets:to_list(AllVNsSet)).
 
 
-get_nearby_VN_stimuli(ExactValue, VNReprValue, VNGRange, Stimulation) ->  Stimulation * (1 - abs(ExactValue - VNReprValue) / VNGRange).
-
-
-
-stimuli_proportional_to_vn_repr_value(_ReprValue, none, none) -> 1.0;
-
-stimuli_proportional_to_vn_repr_value(_ReprValue, TheOnlyValue, TheOnlyValue) -> 1.0;
-
-stimuli_proportional_to_vn_repr_value(ReprValue, MinValue, MaxValue) ->
-    Multiplier = 1.0,   %% strengthens Value against other VNGs (maybe number of VNGs should be used?)
-    (ReprValue - (MaxValue - MinValue) / 2) / (MaxValue - MinValue) * 2.0 * Multiplier.
+get_nearby_VN_stimulus(ExactValue, VNReprValue, MinVNGValue, MaxVNGValue, Stimulus) -> 
+    Stimulus * (1 - abs(ExactValue - VNReprValue) / vng_range(MinVNGValue, MaxVNGValue)).

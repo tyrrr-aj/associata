@@ -1,9 +1,15 @@
 __pycache__
 .conda
 .vscode
+
+charts
 experiments
+flamegraphs
+log
 models
+stacks_out
+
 *.log
 *.txt
-results
+*.out
 erl_crash.dump
