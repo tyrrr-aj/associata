@@ -1,6 +1,7 @@
 -module(ong).
--export([create_ONG/2, new_ON/1, stimulate/3, get_excitation/2, get_neighbours/2, delete/1]).
+-export([create_ONG/2, new_ON/2, stimulate/3, get_excitation/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
 -export([remove_killed_ON/2]).
+-export([reset_after_deadlock/1]).
 
 -include("config.hrl").
 -include("stimulation.hrl").
@@ -14,8 +15,8 @@ create_ONG(AGDS, GlobalCfg) ->
     spawn(fun() -> init(AGDS, GlobalCfg) end).
 
 
-new_ON(ONG) -> 
-    ONG ! {new_ON, self()},
+new_ON(ExperimentStep, ONG) -> 
+    ONG ! {new_ON, ExperimentStep, self()},
     receive
         {new_ON, NewON, NewONIndex} -> {NewON, NewONIndex}
     end.
@@ -26,7 +27,7 @@ stimulate(ONG, Stimuli, StimulationSpec) ->
 
 
 remove_killed_ON(ONG, ONIndex) -> 
-    ONG ! {remove_killed_ON, ONIndex}.
+    ONG ! {remove_killed_ON, self(), ONIndex}.
 
 
 get_excitation(ONG, LastStimulationId) -> 
@@ -43,20 +44,34 @@ get_neighbours(ONG, ONIndex) ->
     end.
 
 
+get_number_of_nodes(ONG) ->
+    ONG ! {get_number_of_nodes, self()},
+    receive
+        {number_of_nodes, NumberOfNodes} -> NumberOfNodes
+    end.
+
+
 delete(ONG) -> ONG ! delete.
+
+
+reset_after_deadlock(ONG) -> 
+    ONG ! reset_after_deadlock,
+    receive
+        {reset_after_deadlock_finished, ONG} -> ok
+    end.
 
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
  
 init(AGDS, #global_cfg{reporter=Reporter} = GlobalCfg) ->
-    report:node_group_creation(self(), "ONG", ong, Reporter),
+    report:node_group_creation(self(), "ong", ong, Reporter),
     process_events(#state{ons=#{}, next_on_index=0, stimulated_ons=[], agds=AGDS, global_cfg=GlobalCfg}).
 
 
 process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=StimulatedONs, agds=AGDS, global_cfg=GlobalCfg} = State) ->
     receive
-        {new_ON, Sender} ->
-            NewON = on:create_ON(self(), NextONIndex, GlobalCfg),
+        {new_ON, ExperimentStep, Sender} ->
+            NewON = on:create_ON(self(), NextONIndex, ExperimentStep, GlobalCfg),
             Sender ! {new_ON, NewON, NextONIndex},
             process_events(State#state{ons=ONs#{NextONIndex => NewON}, next_on_index=NextONIndex + 1});
 
@@ -81,16 +96,16 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
 
         
         {stimulation_finished, StimulatedON, 0, 1} ->
-            % io:format("~s    ONG: sitmulation_finished received from ~p, stimulated ons: ~p~n", [utils:get_timestamp_str(), StimulatedON, StimulatedONs]),
             NewStimulatedONs = lists:delete(StimulatedON, StimulatedONs),
             case NewStimulatedONs of
-                [] -> stimulation:send_stimulation_finished(AGDS, 0);
+                [] -> 
+                    stimulation:send_stimulation_finished(AGDS, 0);
                 _ -> ok
             end,
             process_events(State#state{stimulated_ons=NewStimulatedONs});
 
 
-        {remove_killed_ON, ONIndex} ->
+        {remove_killed_ON, _ON, ONIndex} ->
             NewONs = maps:remove(ONIndex, ONs),
             process_events(State#state{ons=NewONs});
 
@@ -111,6 +126,17 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
             process_events(State);
 
 
+        {get_number_of_nodes, Asker} ->
+            Asker ! {number_of_nodes, maps:size(ONs)},
+            process_events(State);
+
+
         delete -> 
-            maps:foreach(fun(_Index, ON) -> on:delete(ON) end, ONs)
+            maps:foreach(fun(_Index, ON) -> on:delete(ON) end, ONs);
+
+        
+        reset_after_deadlock ->
+            maps:foreach(fun(_Index, ON) -> on:reset_after_deadlock(ON) end, ONs),
+            AGDS ! {reset_after_deadlock_finished, self()},
+            process_events(State#state{stimulated_ons=[]})
     end.

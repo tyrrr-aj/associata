@@ -1,6 +1,8 @@
 -module(vng).
--export([create_numerical_VNG/4, create_categorical_VNG/3, add_value/4, stimulate/3, get_excitation/2, get_neighbours/2, delete/1]).
+-export([create_numerical_VNG/4, create_categorical_VNG/3, add_value/5, wait_for_value_added/1, stimulate/3, get_excitation/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
 -export([remove_killed_vn/3, notify_VNG_to_ON_conn_count_incremented/1, notify_VNG_to_ON_conn_count_decremented/1]).
+-export([reset_after_deadlock/1]).
+-export([print_neighbourhoods/1]).
 
 -include("config.hrl").
 -include("stimulation.hrl").
@@ -27,7 +29,9 @@ create_numerical_VNG(VNGName, Epsilon, AGDS, GlobalCfg) -> spawn(fun() -> init(n
 create_categorical_VNG(VNGName, AGDS, GlobalCfg) -> spawn(fun() -> init(categorical, VNGName, no_epsilon, AGDS, GlobalCfg) end).
 
 
-add_value(VNG, AddedValue, RespectiveON, RespectiveONIndex) -> VNG ! {add_value, AddedValue, RespectiveON, RespectiveONIndex}.
+add_value(ExperimentStep, VNG, AddedValue, RespectiveON, RespectiveONIndex) -> VNG ! {add_value, AddedValue, RespectiveON, RespectiveONIndex, ExperimentStep}.
+
+wait_for_value_added(VNG) -> receive {value_added, VNG} -> ok end.
 
 
 stimulate(VNG, Stimuli, StimulationSpec) -> 
@@ -49,6 +53,13 @@ get_neighbours(VNG, Value) ->
     end.
 
 
+get_number_of_nodes(VNG) ->
+    VNG ! {get_number_of_nodes, self()},
+    receive
+        {number_of_nodes, NumberOfNodes} -> NumberOfNodes
+    end.
+
+
 remove_killed_vn(VNG, RemovedValue, RemovedVN) -> VNG ! {remove_killed_vn, RemovedValue, RemovedVN}.
 
 
@@ -58,6 +69,17 @@ notify_VNG_to_ON_conn_count_decremented(VNG) -> VNG ! {notify_VNG_to_ON_conn_cou
 
 
 delete(VNG) -> VNG ! delete.
+
+
+reset_after_deadlock(VNG) -> 
+    VNG ! reset_after_deadlock,
+    receive
+        {reset_after_deadlock_finished, VNG} -> ok
+    end.
+
+
+print_neighbourhoods(VNG) ->
+    VNG ! print_neighbourhoods.
 
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
@@ -112,7 +134,7 @@ process_events(#state{
 } = State) ->
 
     receive
-        {add_value, AddedValue, RespectiveON, RespectiveONIndex} ->
+        {add_value, AddedValue, RespectiveON, RespectiveONIndex, ExperimentStep} ->
             if
                 MinValue =:= none, MaxValue =:= none -> NewMinValue = AddedValue, NewMaxValue = AddedValue;
                 AddedValue < MinValue -> NewMinValue = AddedValue, NewMaxValue = MaxValue, update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue);
@@ -125,12 +147,12 @@ process_events(#state{
                     case maps:find(AddedValue, VNs) of
                         {ok, VN} -> NewVNs = VNs;
                         error -> 
-                            VN = vn:create_VN(categorical, AddedValue, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, GlobalCfg),
+                            VN = vn:create_VN(categorical, AddedValue, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, ExperimentStep, GlobalCfg),
                             NewVNs = VNs#{AddedValue => VN}
                     end;
                 
                 numerical -> 
-                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(numerical, AddedValue, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, GlobalCfg) end),
+                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValue, fun() -> vn:create_VN(numerical, AddedValue, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, ExperimentStep, GlobalCfg) end),
                         
                     case IsNew of
                         new_value ->
@@ -140,9 +162,9 @@ process_events(#state{
                                 fun(Neigh) -> case Neigh of
                                     none -> ok;
                                     {NeighReprValue, NeighVN} ->
-                                        vn:connect_VN(VN, NeighVN, NeighReprValue),
-                                        vn:connect_VN(NeighVN, VN, AddedValue),
-                                        report:connection_formed(VN, NeighVN, Reporter)
+                                        vn:connect_VN(VN, NeighVN, NeighReprValue, ExperimentStep),
+                                        vn:connect_VN(NeighVN, VN, AddedValue, ExperimentStep),
+                                        report:connection_formed(VN, NeighVN, ExperimentStep, Reporter)
                                     end
                                 end, 
                                 tuple_to_list(Neighs)
@@ -154,12 +176,14 @@ process_events(#state{
 
             vn:connect_ON(VN, RespectiveON, RespectiveONIndex),
             on:connect_VN(RespectiveON, VN, AddedValue, VNGName),
-            report:connection_formed(VN, RespectiveON, Reporter),
+            report:connection_formed(VN, RespectiveON, ExperimentStep, Reporter),
 
             NewAllVNsSet = sets:add_element(VN, AllVNsSet),
 
             NewVNGtoONConnCount = VNGtoONConnCount + 1,
             update_VNG_to_ON_conn_count(NewAllVNsSet, NewVNGtoONConnCount),
+
+            AGDS ! {value_added, self()},
 
             process_events(State#state{vns=NewVNs, min_value=NewMinValue, max_value=NewMaxValue, all_vns_set=NewAllVNsSet, vng_to_on_conn_count=NewVNGtoONConnCount});
 
@@ -208,7 +232,7 @@ process_events(#state{
                                 end
                             end, sets:new(), Stimuli)
                     end,
-        
+                    
                     case sets:is_empty(NewStimulatedVNs) of
                         true -> stimulation:send_stimulation_finished(AGDS, 0);
                         false -> ok
@@ -219,10 +243,10 @@ process_events(#state{
 
 
         {stimulation_finished, StimulatedVN, 0, 1} ->
-            % io:format("~s    VNG ~p: sitmulation_finished received from ~p, stimulated vns: ~p~n", [utils:get_timestamp_str(), VNGName, StimulatedVN, sets:to_list(StimulatedVNs)]),
             NewStimulatedVNs = sets:del_element(StimulatedVN, StimulatedVNs),
             case sets:is_empty(NewStimulatedVNs) of
-                true -> stimulation:send_stimulation_finished(AGDS, 0);
+                true -> 
+                    stimulation:send_stimulation_finished(AGDS, 0);
                 false -> ok
             end,
             process_events(State#state{stimulated_vns=NewStimulatedVNs});
@@ -263,6 +287,11 @@ process_events(#state{
             process_events(State);
 
 
+        {get_number_of_nodes, Asker} ->
+            Asker ! {number_of_nodes, sets:size(AllVNsSet)},
+            process_events(State);
+
+
         {remove_killed_vn, RemovedValue, RemovedVN} ->
             NewVNs = case VNGType of
                 categorical ->
@@ -293,8 +322,28 @@ process_events(#state{
             case VNGType of
                 categorical -> maps:foreach(fun(_Value, VN) -> vn:delete(VN) end, VNs);
                 numerical -> avb_tree:foreach(fun(_Value, VN) -> vn:delete(VN) end, VNs)
-            end
+            end;
 
+
+        reset_after_deadlock ->
+            case VNGType of
+                categorical -> maps:foreach(fun(_Value, VN) -> vn:reset_after_deadlock(VN) end, VNs);
+                numerical -> avb_tree:foreach(fun(_Value, VN) -> vn:reset_after_deadlock(VN) end, VNs)
+            end,
+            AGDS ! {reset_after_deadlock_finished, self()},
+            process_events(State#state{stimulated_vns=sets:new()});
+
+
+        print_neighbourhoods ->
+            Neighbourhoods = [{VN, vn:get_neigh_vns(VN)} || VN <- sets:to_list(AllVNsSet)],
+            FormattedNeighbourhoods = lists:foldl(
+                fun ({VN, {LeftNeigh, RightNeigh}}, Acc) -> 
+                    Acc ++ io_lib:format("~n~p <- ~p -> ~p", [LeftNeigh, VN, RightNeigh]) end, 
+                "", 
+                Neighbourhoods
+            ),
+            io:format("VNG<~p> - VN neighbourhoods: ~s~n", [VNGName, FormattedNeighbourhoods]),
+            process_events(State)
     end.
 
 
@@ -312,6 +361,9 @@ update_VNG_range(AllVNsSet, NewMinValue, NewMaxValue) ->
 update_VNG_to_ON_conn_count(AllVNsSet, NewVNGtoONConnCount) ->
     lists:foreach(fun(VN) -> vn:update_VNG_to_ON_conn_count(VN, NewVNGtoONConnCount) end, sets:to_list(AllVNsSet)).
 
+
+get_nearby_VN_stimulus(ExactValue, _VNReprValue, MinVNGValue, MaxVNGValue, Stimulus) when ExactValue < MinVNGValue; ExactValue > MaxVNGValue -> 
+    Stimulus;
 
 get_nearby_VN_stimulus(ExactValue, VNReprValue, MinVNGValue, MaxVNGValue, Stimulus) -> 
     Stimulus * (1 - abs(ExactValue - VNReprValue) / vng_range(MinVNGValue, MaxVNGValue)).

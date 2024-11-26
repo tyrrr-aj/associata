@@ -1,15 +1,18 @@
 -module(vn).
--export([create_VN/8, 
-        connect_VN/3, 
+-export([create_VN/9, 
+        connect_VN/4, 
         connect_ON/3, 
-        disconnect_ON/2,
-        disconnect_VN/3,
+        disconnect_ON/3,
+        disconnect_VN/6,
+        confirm_vn_disconnected/3,
         update_VNG_range/3, 
         update_VNG_to_ON_conn_count/2,
         stimulate/4, 
         get_excitation/2,
         get_neighbours/1,
-        delete/1
+        get_neigh_vns/1,
+        delete/1,
+        reset_after_deadlock/1
     ]).
 
 -include("config.hrl").
@@ -34,23 +37,36 @@
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%% 
 
-create_VN(categorical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) -> 
-    spawn(fun() -> init(categorical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) end);
+create_VN(categorical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, ExperimentStep, GlobalCfg) -> 
+    spawn(fun() -> init(categorical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, ExperimentStep, GlobalCfg) end);
 
-create_VN(numerical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) -> 
-    spawn(fun() -> init(numerical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, GlobalCfg) end).
-
-
-connect_VN(ThisVN, ConnectedVN, ConnectedVNValue) -> ThisVN ! {connect_VN, ConnectedVN, ConnectedVNValue}.
+create_VN(numerical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, ExperimentStep, GlobalCfg) -> 
+    spawn(fun() -> init(numerical, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, ExperimentStep, GlobalCfg) end).
 
 
-connect_ON(ThisVN, ON, ONIndex) -> ThisVN ! {connect_ON, ON, ONIndex}.
+connect_VN(ThisVN, ConnectedVN, ConnectedVNValue, ExperimentStep) -> 
+    ThisVN ! {connect_VN, self(), ConnectedVN, ConnectedVNValue, ExperimentStep},
+    receive
+        {vn_connected, ThisVN, ConnectedVN} -> ok;
+        {remove_killed_vn, ReprValue, ThisVN} -> vng:remove_killed_vn(self(), ReprValue, ThisVN)
+    end.
 
 
-disconnect_ON(ThisVN, ON) -> ThisVN ! {disconnect_ON, ON}.
+
+connect_ON(ThisVN, ON, ONIndex) -> 
+    ThisVN ! {connect_ON, self(), ON, ONIndex},
+    receive
+        {on_connected, ThisVN, ON} -> ok;
+        {remove_killed_vn, ReprValue, ThisVN} -> vng:remove_killed_vn(self(), ReprValue, ThisVN)
+    end.
 
 
-disconnect_VN(ThisVN, DisconnectedVN, ReplacementVN) -> ThisVN ! {disconnect_VN, DisconnectedVN, ReplacementVN}.
+disconnect_ON(ThisVN, ON, ExperimentStep) -> ThisVN ! {disconnect_ON, ON, ExperimentStep}.
+
+% Direction - of information flow, i.e. from DisconnectedVN to ThisVN
+disconnect_VN(ThisVN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep) -> ThisVN ! {disconnect_VN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep}.
+
+confirm_vn_disconnected(ThisVN, VN, IntermediateZombies) -> ThisVN ! {confirm_vn_disconnected, VN, IntermediateZombies}.
 
 
 update_VNG_range(ThisVN, NewVNGMinValue, NewVNGMaxValue) -> ThisVN ! {update_VNG_range, NewVNGMinValue, NewVNGMaxValue}.
@@ -65,31 +81,48 @@ stimulate(ThisVN, Stimulus, CurrDepth, StimulationSpec) ->
 
 get_excitation(ThisVN, LastStimulationId) -> 
     ThisVN ! {get_excitation, self(), LastStimulationId},
-    % io:format("~s    VN ~p (VNG: ~p): get_excitation sent~n", [utils:get_timestamp_str(), ThisVN, self()]),
     receive
-        {last_excitation, Excitation} -> Excitation;
+        {last_excitation, ThisVN, Excitation} -> Excitation;
         {remove_killed_vn, ReprValue, ThisVN} -> 
             vng:remove_killed_vn(self(), ReprValue, ThisVN),
             none
     end.
 
 
-get_neighbours(ThisVN) -> ThisVN ! {get_neighbours, self()},
+get_neighbours(ThisVN) -> 
+    ThisVN ! {get_neighbours, self()},
     receive
-        {neighbours, Neighbours} -> Neighbours;
+        {neighbours, ThisVN, Neighbours} -> Neighbours;
         {remove_killed_vn, ReprValue, ThisVN} -> 
             vng:remove_killed_vn(self(), ReprValue, ThisVN),
             []
     end.
 
 
+get_neigh_vns(ThisVN) ->
+    ThisVN ! {get_neigh_vns, self()},
+    receive
+        {neigh_vns, ThisVN, Neighbours} -> Neighbours;
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
+            {none, none}
+    end.
+
+
 delete(ThisVN) -> ThisVN ! delete.
+
+
+reset_after_deadlock(ThisVN) -> 
+    ThisVN ! reset_after_deadlock,
+    receive
+        {reset_after_deadlock_finished, ThisVN} -> ok
+    end.
 
 
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(VNType, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, #global_cfg{reporter=Reporter} = GlobalCfg) ->
-    report:node_creation(self(), vn, RepresentedValue, VNG, Reporter),
+init(VNType, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VNGMaxValue, ExperimentStep, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+    report:node_creation(self(), vn, RepresentedValue, VNG, ExperimentStep, Reporter),
     process_events(#state{
         vn_type=VNType, 
         vng=VNG, 
@@ -131,13 +164,16 @@ process_events(#state{
             CurrDepth, 
             #stim_spec{
                 id=StimulationId,
+                experiment_step=ExperimentStep,
+                name=StimulationName,
+                write_to_log=WriteToLog,
+                kind=StimulationKind, 
                 node_group_modes=NodeGroupModes,
                 min_passed_stimulus=MinPassedStimulus
             }=StimulationSpec
         } ->
-
             dbg_counter:add_stimulations({vn, VNGName}, 1, StimulationId, GlobalCfg#global_cfg.dbg_counter),
-
+            
             CurrExcitation = case StimulationId of
                 LastStimulationId -> LastExcitation;
                 _ -> 0.0
@@ -155,6 +191,7 @@ process_events(#state{
                     case Source of
                         VNG ->
                             stimulation:send_stimulation_finished(Source, CurrDepth),
+                            report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
                             process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId});
                         _ ->
                             ResStimulus = case AmplifingFactor of
@@ -165,12 +202,14 @@ process_events(#state{
                                         VNGMaxValue - VNGMinValue == 0.0 -> 1.0;
                                         true -> (RepresentedValue - VNGMinValue) / (VNGMaxValue - VNGMinValue)
                                     end
-                                end,
-                                stimulation:respond_to_stimulation(Source, ResStimulus),
-                                process_events(State#state{last_excitation=CurrExcitation, last_stimulation_id=StimulationId})
+                            end,
+                            report:node_stimulated(WriteToLog, self(), Source, ResStimulus, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
+                            stimulation:respond_to_stimulation(Source, ResStimulus),
+                            process_events(State#state{last_excitation=CurrExcitation, last_stimulation_id=StimulationId})
                     end;
 
                 CurrVNGMode ->
+                    report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
                     
                     % VN -> VN
                     NeighVNsToStimulate = case VNType of
@@ -178,22 +217,28 @@ process_events(#state{
                         numerical -> [Neigh || Neigh <- tuple_to_list(ConnectedVNs), Neigh =/= none, element(1, Neigh) =/= Source]
                     end,
 
-                    StimulatedVNs = lists:foldl(
-                        fun({VN, NeighValue}, Acc) ->
-                            NeighStimulus = Stimulus * weight_vn_to_vn(NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue),
-                            if 
-                                NeighStimulus >= MinPassedStimulus -> 
-                                    vn:stimulate(VN, NeighStimulus, NewDepth, StimulationSpec),
-                                    [VN | Acc];
-                                true -> Acc
-                            end
+                    StimulatedVNs = case CurrVNGMode of
+                        accumulative -> [];
+                        transitive -> lists:foldl(
+                                fun({VN, NeighValue}, Acc) ->
+                                    NeighStimulus = Stimulus * weight_vn_to_vn(NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue),
+                                    if 
+                                        NeighStimulus >= MinPassedStimulus -> 
+                                            vn:stimulate(VN, NeighStimulus, NewDepth, StimulationSpec),
+                                            [VN | Acc];
+                                        true -> Acc
+                                    end
+                                end,
+                                [],
+                                NeighVNsToStimulate
+                            )
                         end,
-                        [],
-                        NeighVNsToStimulate
-                    ),
 
                     % VN -> ON
-                    ONStimulus = Stimulus * weight_vn_to_on(ConnectedONs, EntireVNGConnCount),
+                    ONStimulus = case StimulationKind of
+                        poisoning -> Stimulus; % * (1.0 - weight_vn_to_on(ConnectedONs, EntireVNGConnCount));
+                        _ -> Stimulus * weight_vn_to_on(ConnectedONs, EntireVNGConnCount)
+                    end,
 
                     StimulatedONs = case CurrVNGMode of
                         accumulative -> [];
@@ -245,21 +290,12 @@ process_events(#state{
                             end
                     end,
 
-                    % io:format(
-                    %     "~s    VN ~p: stimulated nodes ~p, new stimulated neighs: ~p~n", 
-                    %     [utils:get_timestamp_str(), self(), StimulatedONs ++ StimulatedVNs, NewStimulatedNeighs]
-                    % ),
-
                     % Accumulate
                     process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId, stimulated_neighs=NewStimulatedNeighs})
             end;
 
 
         {stimulation_finished, StimulatedNode, Depth, ConfirmationCount} ->
-            % io:format(
-            %     "~s    VN ~p: stimulation_finished received from ~p at depth: ~p (confirmation count: ~p)~nstimulated neighs: ~p~n", 
-            %     [utils:get_timestamp_str(), self(), StimulatedNode, Depth, ConfirmationCount, StimulatedNeighs]
-            % ),
             NewStimulatedNeighs = case StimulatedNeighs of
                 #{Depth := {#{StimulatedNode := ConfirmationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
                     NewNeighsAtDepth = maps:remove(StimulatedNode, NeighsAtDepth),
@@ -274,69 +310,107 @@ process_events(#state{
                 #{Depth := {#{StimulatedNode := StimulationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
                     StimulatedNeighs#{Depth => {NeighsAtDepth#{StimulatedNode => StimulationCount - ConfirmationCount}, SourcesAtDepth}}
             end,
+
             process_events(State#state{stimulated_neighs=NewStimulatedNeighs});
 
 
-        {connect_VN, NewConnectedVN, ConnectedVNValue} ->
-            if
+        {connect_VN, Asker, NewConnectedVN, ConnectedVNValue, ExperimentStep} ->
+            NewConnectedVNs = if
                 % no need to handle categorical VN case - connect_VN should never be called on such VN
                 ConnectedVNValue < RepresentedValue -> 
                     {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
-                    report_breaking_connection(LeftConnectedVN, NewConnectedVN, GlobalCfg),
-                    process_events(State#state{connected_vns={{NewConnectedVN, ConnectedVNValue}, RightConnectedVN}});
+                    report_breaking_connection(LeftConnectedVN, NewConnectedVN, ExperimentStep, GlobalCfg),
+                    {{NewConnectedVN, ConnectedVNValue}, RightConnectedVN};
+
                 ConnectedVNValue > RepresentedValue ->
-                    {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
-                    report_breaking_connection(RightConnectedVN, NewConnectedVN, GlobalCfg),
-                    process_events(State#state{connected_vns={LeftConnectedVN, {NewConnectedVN, ConnectedVNValue}}})
-            end;
+                    {LeftConnectedVN, _RightConnectedVN} = ConnectedVNs,
+                    %% DON'T report_breaking_connection(RightConnectedVN, NewConnectedVN, ExperimentStep, GlobalCfg) - your neighbour will do it
+                    {LeftConnectedVN, {NewConnectedVN, ConnectedVNValue}}
+            end,
+
+            Asker ! {vn_connected, self(), NewConnectedVN},
+            process_events(State#state{connected_vns=NewConnectedVNs});
 
 
-        {connect_ON, ON, ONIndex} -> 
+        {connect_ON, Asker, ON, ONIndex} -> 
+            Asker ! {on_connected, self(), ON},
             process_events(State#state{connected_ons=ConnectedONs#{ON => ONIndex}});
 
 
-        {disconnect_ON, ON} ->
+        {disconnect_ON, ON, ExperimentStep} ->
             NewConnectedONs = maps:remove(ON, ConnectedONs),
             vng:notify_VNG_to_ON_conn_count_decremented(VNG),
             
-            case NewConnectedONs of
-                [] -> 
-                    report:node_killed(self(), Reporter),
+            if 
+                map_size(NewConnectedONs) == 0 -> 
+                    report:node_killed(self(), ExperimentStep, Reporter),
+                    
+                    VNsPendingDisconnection = case VNType of
+                        categorical -> [];
 
-                    case VNType of
-                        categorical -> ok;
                         numerical ->
                             {LeftConnectedVN, RightConnectedVN} = ConnectedVNs,
                             case LeftConnectedVN of
                                 none -> ok;
-                                {LeftVN, _LeftReprValue} -> vn:disconnect_VN(LeftVN, self(), RightConnectedVN)
+                                {LeftVN, _LeftReprValue} -> vn:disconnect_VN(LeftVN, left, self(), RightConnectedVN, sets:new([{version, 2}]), ExperimentStep)
                             end,
                             case RightConnectedVN of
                                 none -> ok;
-                                {RightVN, _RightReprValue} -> vn:disconnect_VN(RightVN, self(), LeftConnectedVN)
-                            end
+                                {RightVN, _RightReprValue} -> vn:disconnect_VN(RightVN, right, self(), LeftConnectedVN, sets:new([{version, 2}]), ExperimentStep)
+                            end,
+                            [VN || {VN, _ReprValue} <- tuple_to_list(ConnectedVNs), VN /= none]
                     end,
 
                     vng:remove_killed_vn(VNG, RepresentedValue, self()),
-                    zombie_wait_for_orphan_stimulations(StimulatedNeighs);
+                    zombie_wait_for_orhpan_messages(StimulatedNeighs, ConnectedVNs, sets:from_list(VNsPendingDisconnection, [{version, 2}]), ON);
 
-                _ -> process_events(State#state{connected_ons=NewConnectedONs})
+                true -> 
+                    on:confirm_death_notification(ON, self()),
+                    process_events(State#state{connected_ons=NewConnectedONs})
             end;
 
 
-        {disconnect_VN, DisconnectedVN, {ReplVN, _ReplVNValue} = ReplacementVN} ->
-            NewConnectedVNs = case ConnectedVNs of
-                {{DisconnectedVN, _} = OldLeftConnectedVN, RightConnectedVN} -> 
-                    report_breaking_connection(OldLeftConnectedVN, ReplacementVN, GlobalCfg),
-                    % I<3Ola; Nokia: connecting_people; I<3Ola
-                    {ReplacementVN, RightConnectedVN};
-                
-                {LeftConnectedVN, {DisconnectedVN, _} = OldRightConnectedVN} -> 
-                    report_breaking_connection(OldRightConnectedVN, ReplacementVN, GlobalCfg),
-                    {LeftConnectedVN, ReplacementVN}
+        {disconnect_VN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep} ->
+            NewConnectedVNs = case Direction of
+                left ->
+                    case ConnectedVNs of
+                        {_LeftConnectedVN, none} -> 
+                            ConnectedVNs;
+                        {LeftConnectedVN, {RightConnectedVN, RightConnectedVNValue}} ->
+                            if
+                                DisconnectedVN =:= RightConnectedVN ->
+                                    report_breaking_connection({DisconnectedVN, na}, ReplacementVN, ExperimentStep, GlobalCfg),
+                                    {LeftConnectedVN, ReplacementVN};
+                                ReplacementVN =:= none orelse element(2, ReplacementVN) > RightConnectedVNValue -> 
+                                    report_breaking_connection({DisconnectedVN, na}, ReplacementVN, ExperimentStep, GlobalCfg),
+                                    {LeftConnectedVN, ReplacementVN};
+                                true -> ConnectedVNs
+                            end
+                    end;
+
+                right ->
+                    case ConnectedVNs of
+                        {none, _RightConnectedVN} -> 
+                            ConnectedVNs;
+                        {{LeftConnectedVN, LeftConnectedVNValue}, RightConnectedVN} ->
+                            if
+                                DisconnectedVN =:= LeftConnectedVN ->
+                                    report_breaking_connection({DisconnectedVN, na}, ReplacementVN, ExperimentStep, GlobalCfg),
+                                    % I<3Ola; Nokia: connecting_people; I<3Ola
+                                    {ReplacementVN, RightConnectedVN};
+                                ReplacementVN =:= none orelse element(2, ReplacementVN) < LeftConnectedVNValue -> 
+                                    report_breaking_connection({DisconnectedVN, na}, ReplacementVN, ExperimentStep, GlobalCfg),
+                                    {ReplacementVN, RightConnectedVN};
+                                true -> ConnectedVNs
+                            end
+                    end
             end,
 
-            report:connection_formed(self(), ReplVN, Reporter),
+            vn:confirm_vn_disconnected(DisconnectedVN, self(), IntermediateZombies),
+            case ReplacementVN of
+                none -> ok;
+                {ReplVN, _ReplVNValue} -> report:connection_formed(self(), ReplVN, ExperimentStep, Reporter)
+            end,
             process_events(State#state{connected_vns=NewConnectedVNs});
 
 
@@ -349,13 +423,11 @@ process_events(#state{
 
 
         {get_excitation, Asker, LastAgdsStimulationId} -> 
-            % io:format("~s    VN ~p (VNG: ~p): get_excitation received~n", [utils:get_timestamp_str(), VNG, self()]),
             Excitation = case LastAgdsStimulationId of
                 LastStimulationId -> LastExcitation;
                 _ -> 0.0
             end,
-            % io:format("~s    VN ~p (VNG: ~p): sending {last_excitation, ~p} back~n", [utils:get_timestamp_str(), VNG, self(), Excitation]),
-            Asker ! {last_excitation, Excitation},
+            Asker ! {last_excitation, self(), Excitation},
             process_events(State);
         
 
@@ -367,12 +439,22 @@ process_events(#state{
                     [{vn, VNGName, VNValue} || {_VN, VNValue} <- NeighVNs]
             end,
             NeighbouringONs = [{on, ONIndex} || ONIndex <- maps:values(ConnectedONs)],
-            Asker ! {neighbours, NeighbouringVNs ++ NeighbouringONs},
+            Asker ! {neighbours, self(), NeighbouringVNs ++ NeighbouringONs},
+            process_events(State);
+
+
+        {get_neigh_vns, Asker} ->
+            Asker ! {neigh_vns, self(), ConnectedVNs},
             process_events(State);
 
     
-        delete -> ok
+        delete -> ok;
 
+
+        reset_after_deadlock ->
+            VNG ! {reset_after_deadlock_finished, self()},
+            process_events(State#state{stimulated_neighs=#{}})
+            
     end.
 
 
@@ -382,34 +464,37 @@ weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
 
 
 weight_vn_to_on(ConnectedONs, EntireVNGConnCount) ->
-    %% CLASSICAL WEIGHT
-    % case length(ConnectedONs) > 0 of
-    %     true ->  1 / length(ConnectedONs);
-    %     false -> 0.0
-    % end.
-    
-    %% MODIFIED WEIGHT
-    
     VNConnCount = maps:size(ConnectedONs),
 
     if 
-        EntireVNGConnCount == VNConnCount -> 1.0;
+        EntireVNGConnCount == VNConnCount -> 0.0;
         true -> (EntireVNGConnCount - maps:size(ConnectedONs)) / EntireVNGConnCount
     end.
 
 
-report_breaking_connection(none, _NewConnectedVN, _GlobalCfg) -> ok;
+report_breaking_connection(none, _NewConnectedVN, _ExperimentStep, _GlobalCfg) -> ok;
 
-report_breaking_connection({OldConnectedVN, _OldConnectedVNValue}, NewConnectedVN, _GlobalCfg) when OldConnectedVN == NewConnectedVN -> ok;
+report_breaking_connection({OldConnectedVN, _OldConnectedVNValue}, NewConnectedVN, _ExperimentStep, _GlobalCfg) when OldConnectedVN == NewConnectedVN -> ok;
 
-report_breaking_connection({OtherVN, _OtherVNValue}, _NewConnectedVN, #global_cfg{reporter=Reporter}) -> report:connection_broken(self(), OtherVN, Reporter).
+report_breaking_connection({OtherVN, _OtherVNValue}, _NewConnectedVN, ExperimentStep, #global_cfg{reporter=Reporter}) -> report:connection_broken(self(), OtherVN, ExperimentStep, Reporter).
 
 
-zombie_wait_for_orphan_stimulations(StimulatedNeighs) ->
+zombie_wait_for_orhpan_messages(StimulatedNeighs, LastConnectedVNs, VNsPendingDisconnection, ONPendingConfirmation) ->
+    AreAnyVNsPendingDisconnection = sets:is_empty(VNsPendingDisconnection),
+
+    NewONPendingConfirmation = if
+        ONPendingConfirmation =:= none -> none;
+        AreAnyVNsPendingDisconnection -> 
+            on:confirm_death_notification(ONPendingConfirmation, self()),
+            none;
+        true -> ONPendingConfirmation
+    end,
+
     receive
         {stimulate, Source, _Stimulus, Depth, _StimulationSpec} ->
             stimulation:send_stimulation_finished(Source, Depth),
-            zombie_wait_for_orphan_stimulations(StimulatedNeighs);
+            zombie_wait_for_orhpan_messages(StimulatedNeighs, LastConnectedVNs, VNsPendingDisconnection, NewONPendingConfirmation);
+
         {stimulation_finished, StimulatedNode, Depth, ConfirmationCount} -> 
             NewStimulatedNeighs = case StimulatedNeighs of
                 #{Depth := {#{StimulatedNode := ConfirmationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
@@ -425,6 +510,43 @@ zombie_wait_for_orphan_stimulations(StimulatedNeighs) ->
                 #{Depth := {#{StimulatedNode := StimulationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
                     StimulatedNeighs#{Depth => {NeighsAtDepth#{StimulatedNode => StimulationCount - ConfirmationCount}, SourcesAtDepth}}
             end,
-            zombie_wait_for_orphan_stimulations(NewStimulatedNeighs)
+            zombie_wait_for_orhpan_messages(NewStimulatedNeighs, LastConnectedVNs, VNsPendingDisconnection, NewONPendingConfirmation);
+
+        {disconnect_VN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep} ->
+            {LeftConnectedVN, RightConnectedVN} = LastConnectedVNs,
+
+            case Direction of
+                left ->
+                    case LeftConnectedVN of
+                        none -> 
+                            vn:confirm_vn_disconnected(DisconnectedVN, self(), IntermediateZombies);
+                        {LeftConnectedVNPid, _LeftConnectedVNValue} -> 
+                            vn:disconnect_VN(LeftConnectedVNPid, left, DisconnectedVN, ReplacementVN, sets:add_element(self(), IntermediateZombies), ExperimentStep)
+                    end;
+                right ->
+                    case RightConnectedVN of
+                        none ->
+                            vn:confirm_vn_disconnected(DisconnectedVN, self(), IntermediateZombies);
+                        {RightConnectedVNPid, _RightConnectedVNValue} -> 
+                            vn:disconnect_VN(RightConnectedVNPid, right, DisconnectedVN, ReplacementVN, sets:add_element(self(), IntermediateZombies), ExperimentStep)
+                    end
+            end,
+            zombie_wait_for_orhpan_messages(StimulatedNeighs, LastConnectedVNs, VNsPendingDisconnection, NewONPendingConfirmation);
+
+        {confirm_vn_disconnected, VN, IntermediateZombies} ->
+            IsConfirmationFromNeigh = sets:is_element(VN, VNsPendingDisconnection),
+            IsConfirmationFromNodeAfar = not sets:is_empty(sets:intersection(IntermediateZombies, VNsPendingDisconnection)),
+
+            NewVNsPendingDisconnection = if
+                IsConfirmationFromNeigh ->
+                    sets:del_element(VN, VNsPendingDisconnection);
+                IsConfirmationFromNodeAfar ->
+                    [MatchingZombie] = sets:to_list(sets:intersection(IntermediateZombies, VNsPendingDisconnection)),
+                    sets:del_element(MatchingZombie, VNsPendingDisconnection);
+                true -> 
+                    VNsPendingDisconnection
+            end,
+            zombie_wait_for_orhpan_messages(StimulatedNeighs, LastConnectedVNs, NewVNsPendingDisconnection, NewONPendingConfirmation)
+
     after 5000 -> killed
     end.

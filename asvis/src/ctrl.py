@@ -36,7 +36,7 @@ class Ctrl:
         print(f'Ctrl received cmd: {message}')
 
         match message:
-            case (Atom('new_structure'), structure_type, structure_id):
+            case (Atom('ctrl'), (Atom('new_structure'), structure_type, structure_id)):
                 print(f'New structure: {structure_type} ({structure_id})')
                 if structure_type == Atom('agds'):
                     print(f'Creating AGDS observer for {structure_id}')

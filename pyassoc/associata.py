@@ -149,13 +149,15 @@ class AAS:
 
 
 class AGDS(AAS):
-    def __init__(self, id, channel):
+    def __init__(self, id, channel, save_stimulation=None):
         super().__init__('agds', id, channel)
         self._stimulated = False
         
-        self._inference_timeout_sec = 5
+        self._inference_timeout_sec = 15
         self._poisoning_timeout_sec = 5
         self._query_timeout_sec = 5
+
+        self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: True
 
     async def add_numerical_vng(self, name, epsilon):
         await self._channel.send_backend_async((
@@ -172,26 +174,37 @@ class AGDS(AAS):
             Atom('categorical'), 
         ))
 
-    async def add_observation(self, vng_values):
-        add_observation_cmd = (Atom('add_observation'), vng_values)
+    async def add_observation(self, vng_values, experiment_step):
+        add_observation_cmd = (Atom('add_observation'), experiment_step, vng_values)
         # print(f'Adding observation: {add_observation_cmd}')
         await self._channel.send_backend_async(add_observation_cmd)
     
-    async def infere(self, inference_setup, min_passed_stimulus):
+    async def infere(self, inference_setup, min_passed_stimulus, experiment_step, stimulation_name):
         self._stimulated = True
         # print(f'{timestamp_str()}    sending inference: {inference_setup.get_entries()}')
         # print(f'{timestamp_str()}    sending inference: {(Atom("infere"), inference_setup.get_entries(), inference_setup.get_modes_repr(), min_passed_stimulus)}')
-        await self._channel.send_backend_async((Atom('infere'), inference_setup.get_entries(), inference_setup.get_modes_repr(), min_passed_stimulus))
+        await self._channel.send_backend_async((
+            Atom('infere'), 
+            experiment_step, 
+            stimulation_name, 
+            self._save_stimulation(experiment_step), 
+            inference_setup.get_entries(), 
+            inference_setup.get_modes_repr(), 
+            min_passed_stimulus
+        ))
         # print(f'{timestamp_str()}    waiting for inference response')
         await self._channel.receive_async(self._inference_timeout_sec)    # 'inference_finished'
         # print(f'{timestamp_str()}    inference finished')
 
-    async def poison(self, inference_setup, min_passed_stimulus, deadly_dose, min_acc_dose):
+    async def poison(self, inference_setup, min_passed_stimulus, deadly_dose, min_acc_dose, experiment_step, stimulation_name):
         self._stimulated = True
         # print(f'{timestamp_str()}    sending poison: {inference_setup.get_entries()}')
         # print(f'{timestamp_str()}    sending poison: {(Atom("poison"), inference_setup.get_entries(), inference_setup.get_modes_repr(), min_passed_stimulus, float(deadly_dose), float(min_acc_dose))}')
         await self._channel.send_backend_async((
             Atom('poison'), 
+            experiment_step,
+            stimulation_name,
+            self._save_stimulation(experiment_step), 
             inference_setup.get_entries(), 
             inference_setup.get_modes_repr(), 
             min_passed_stimulus,
@@ -225,6 +238,17 @@ class AGDS(AAS):
         neighs = await self._query_backend((Atom('get_neighbours'), Atom('on'), on_index), self._parse_neighbours_response)
         # print(f'{timestamp_str()}    got neighbours for on {on_index}: {neighs}')
         return neighs
+    
+    async def get_structure_size(self):
+        return await self._query_backend(Atom('get_structure_size'), self._parse_structure_size_response)
+    
+
+    async def export_topology(self):
+        await self._channel.send_vis_async(Atom('export_topology'))
+
+
+    async def export_stimulation(self, experiment_step, stimulation_name):
+        await self._channel.send_vis_async((Atom('export_stimulation'), experiment_step, stimulation_name))
         
 
     async def _query_backend(self, query, parse_response_fn):
@@ -244,6 +268,13 @@ class AGDS(AAS):
         match message:
             case (Atom('neighbours'), neighbours):
                 return neighbours
+            case _:
+                return None
+            
+    def _parse_structure_size_response(self, message):
+        match message:
+            case (Atom('structure_size'), size):
+                return size
             case _:
                 return None
 

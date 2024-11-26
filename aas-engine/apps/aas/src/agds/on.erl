@@ -1,12 +1,14 @@
 -module(on).
 -export([
-    create_ON/3, 
+    create_ON/4, 
     connect_VN/4, 
     disconnect_VN/2, 
+    confirm_death_notification/2,
     stimulate/4, 
     get_excitation/2, 
     get_neighbours/1,
-    delete/1
+    delete/1,
+    reset_after_deadlock/1
 ]).
 
 -include("config.hrl").
@@ -26,13 +28,20 @@
 
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
 
-create_ON(ONG, ONIndex, GlobalCfg) -> spawn(fun() -> init(ONG, ONIndex, GlobalCfg) end).
+create_ON(ONG, ONIndex, ExperimentStep, GlobalCfg) -> spawn(fun() -> init(ONG, ONIndex, ExperimentStep, GlobalCfg) end).
 
 
-connect_VN(ON, VN, ReprValue, VNGName) -> ON ! {connect, VN, ReprValue, VNGName}.
+connect_VN(ON, VN, ReprValue, VNGName) -> 
+    ON ! {connect, self(), VN, ReprValue, VNGName},
+    receive 
+        {vn_connected, VN, ON} -> ok 
+    end.
 
 
 disconnect_VN(ON, VN) -> ON ! {disconnect, VN}.
+
+
+confirm_death_notification(ON, VN) -> ON ! {on_death_confirmed_by_vn, VN}.
 
 
 stimulate(ON, Stimulus, CurrDepth, StimulationSpec) -> 
@@ -42,8 +51,8 @@ stimulate(ON, Stimulus, CurrDepth, StimulationSpec) ->
 get_excitation(ON, LastStimulationId) -> 
     ON ! {get_excitation, self(), LastStimulationId},
     receive
-        {excitation, Excitation} -> Excitation;
-        {remove_killed_ON, ONIndex} ->
+        {excitation, ON, Excitation} -> Excitation;
+        {remove_killed_ON, ON, ONIndex} ->
             ong:remove_killed_ON(self(), ONIndex),
             none
     end.
@@ -51,8 +60,8 @@ get_excitation(ON, LastStimulationId) ->
 
 get_neighbours(ON) -> ON ! {get_neighbours, self()},
     receive
-        {neighbours, Neighbours} -> Neighbours;
-        {remove_killed_ON, ONIndex} ->
+        {neighbours, ON, Neighbours} -> Neighbours;
+        {remove_killed_ON, ON, ONIndex} ->
             ong:remove_killed_ON(self(), ONIndex),
             []
     end.
@@ -61,10 +70,17 @@ get_neighbours(ON) -> ON ! {get_neighbours, self()},
 delete(ON) -> ON ! delete.
 
 
+reset_after_deadlock(ON) -> 
+    ON ! reset_after_deadlock,
+    receive
+        {reset_after_deadlock_finished, ON} -> ok
+    end.
+
+
 %% %%%%%%%%%%%%%%% Internals %%%%%%%%%%%%%%%
 
-init(ONG, ONIndex, #global_cfg{reporter=Reporter} = GlobalCfg) ->
-    report:node_creation(self(), on, ONIndex, ONG, Reporter),
+init(ONG, ONIndex, ExperimentStep, #global_cfg{reporter=Reporter} = GlobalCfg) ->
+    report:node_creation(self(), on, ONIndex, ONG, ExperimentStep, Reporter),
     process_events(#state{
         self_index=ONIndex, 
         ong=ONG, 
@@ -96,21 +112,21 @@ process_events(#state{
             CurrDepth,
             #stim_spec{
                 id=StimulationId, 
+                experiment_step=ExperimentStep,
+                name=StimulationName,
+                write_to_log=WriteToLog,
                 node_group_modes=NodeGroupModes, 
                 min_passed_stimulus=MinPassedStimulus, 
                 kind=StimulationKind,
                 params=StimulationParams
             }=StimulationSpec
         } ->
-
-            dbg_counter:add_stimulations(on, 1, StimulationId, GlobalCfg#global_cfg.dbg_counter),
-            
             NewDepth = CurrDepth + 1,
             CurrExcitation = case StimulationId of 
                 CurrStimulationId -> LastExcitation;
                 _ -> 0.0
             end,
-            
+
             case maps:get("ong", NodeGroupModes) of
                 passive -> 
                     stimulation:send_stimulation_finished(Source, CurrDepth),
@@ -120,7 +136,9 @@ process_events(#state{
                     case Source of
                         ONG -> 
                             stimulation:send_stimulation_finished(Source, CurrDepth),
-                            process_events(State#state{last_stimulation_id=StimulationId, last_excitation=CurrExcitation + Stimulus});
+                            NewExcitation = CurrExcitation + Stimulus,
+                            report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
+                            process_events(State#state{last_stimulation_id=StimulationId, last_excitation=NewExcitation});
                         _ ->
                             stimulation:respond_to_stimulation(Source, Stimulus * CurrExcitation),
                             process_events(State#state{last_stimulation_id=StimulationId})
@@ -129,6 +147,8 @@ process_events(#state{
                 CurrONGMode ->
                     EffectiveStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
+
+                    report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
 
                     NewStimulatedNeighs = case CurrONGMode of
                         transitive -> 
@@ -145,9 +165,10 @@ process_events(#state{
         
                             case StimulatedVNs of
                                 [] -> 
-                                    stimulation:send_stimulation_finished(Source, CurrDepth),
+                                    StimulatingNeighsFinished = true,
                                     StimulatedNeighs;
                                 _ -> 
+                                    StimulatingNeighsFinished = false,
                                     case StimulatedNeighs of
                                         #{NewDepth := {StimulatedNeighsAtDepth, SourcesAtDepth}} -> 
                                             NewStimulatedNeighsAtDepth = lists:foldl(
@@ -171,34 +192,50 @@ process_events(#state{
                             end;
                         
                         accumulative -> 
-                            stimulation:send_stimulation_finished(Source, CurrDepth),
+                            StimulatingNeighsFinished = true,
                             #{}
                     end,
 
                     case StimulationKind of
                         inference ->
-                            % report:node_stimulated(self(), NewExcitation, Reporter),
+                            if
+                                StimulatingNeighsFinished -> stimulation:send_stimulation_finished(Source, CurrDepth);
+                                true -> ok
+                            end,
                             process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId, stimulated_neighs=NewStimulatedNeighs});
 
                         poisoning -> 
                             MinAccumulatedDose = maps:get(min_accumulated_dose, StimulationParams),
 
                             NewAccPoisonLvl = if
-                                LastExcitation >= MinAccumulatedDose -> AccPoisonLvl + EffectiveStimulus;
-                                NewExcitation >= MinAccumulatedDose -> AccPoisonLvl + NewExcitation;
+                                LastExcitation >= MinAccumulatedDose -> 
+                                    report:node_poisoned(self(), AccPoisonLvl + EffectiveStimulus, ExperimentStep, Reporter),
+                                    AccPoisonLvl + EffectiveStimulus;
+                                
+                                NewExcitation >= MinAccumulatedDose -> 
+                                    report:node_poisoned(self(), AccPoisonLvl + NewExcitation, ExperimentStep, Reporter),
+                                    AccPoisonLvl + NewExcitation;
+                                
                                 true -> AccPoisonLvl
                             end,
 
-                            % report:node_poisoned(self(), NewAccPoisonLvl, NewExcitation, Stimulus, Source, Reporter),
                             DeadlyDose = maps:get(deadly_dose, StimulationParams),
 
                             if 
                                 NewAccPoisonLvl >= DeadlyDose -> 
-                                    report:node_killed(self(), Reporter),
-                                    [vn:disconnect_ON(VN, self()) || VN <- maps:keys(ConnectedVNs)],
+                                    report:node_killed(self(), ExperimentStep, Reporter),
+                                    [vn:disconnect_ON(VN, self(), ExperimentStep) || VN <- maps:keys(ConnectedVNs)],
                                     ong:remove_killed_ON(ONG, ONIndex),
-                                    zombie_wait_for_orphan_stimulations(NewStimulatedNeighs);
+                                    ZombieStimulatedNeighs = case StimulatingNeighsFinished of
+                                        true -> NewStimulatedNeighs#{NewDepth => {#{}, #{Source => 1}}};
+                                        false -> NewStimulatedNeighs
+                                    end,
+                                    zombie_wait_for_orhpan_messages(ZombieStimulatedNeighs, NewDepth, maps:keys(ConnectedVNs));
                                 true ->
+                                    if 
+                                        StimulatingNeighsFinished -> stimulation:send_stimulation_finished(Source, CurrDepth);
+                                        true -> ok
+                                    end,
                                     process_events(State#state{
                                         last_stimulation_id=StimulationId,
                                         last_excitation=NewExcitation,
@@ -211,10 +248,6 @@ process_events(#state{
 
         
         {stimulation_finished, StimulatedNode, Depth, ConfirmationCount} ->
-            % io:format(
-            %     "~s    ON ~p: stimulation_finished received from ~p at depth: ~p (confirmation count: ~p)~nstimulated neighs: ~p~n", 
-            %     [utils:get_timestamp_str(), self(), StimulatedNode, Depth, ConfirmationCount, StimulatedNeighs]
-            % ),
             NewStimulatedNeighs = case StimulatedNeighs of
                 #{Depth := {#{StimulatedNode := ConfirmationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
                     NewNeighsAtDepth = maps:remove(StimulatedNode, NeighsAtDepth),
@@ -232,7 +265,8 @@ process_events(#state{
             process_events(State#state{stimulated_neighs=NewStimulatedNeighs});
 
 
-        {connect, VN, ReprValue, VNGName} ->
+        {connect, Asker, VN, ReprValue, VNGName} ->
+            Asker ! {vn_connected, VN, self()},
             process_events(State#state{connected_vns=ConnectedVNs#{VN => {ReprValue, VNGName}}});
 
 
@@ -245,17 +279,23 @@ process_events(#state{
                 CurrStimulationId -> LastExcitation;
                 _ -> 0.0
             end,
-            Asker ! {excitation, Excitation},
+            Asker ! {excitation, self(), Excitation},
             process_events(State);
         
 
         {get_neighbours, Asker} -> 
             Response = [{vn, VNGName, ReprValue} || {ReprValue, VNGName} <- maps:values(ConnectedVNs)],
-            Asker ! {neighbours, Response},
+            Asker ! {neighbours, self(), Response},
             process_events(State);
 
 
-        delete -> ok
+        delete -> ok;
+
+
+        reset_after_deadlock ->
+            ONG ! {reset_after_deadlock_finished, self()},
+            process_events(State#state{stimulated_neighs=#{}})
+            
     end.
 
 
@@ -279,18 +319,18 @@ amplify_stimulus_with_responsive_vns(Stimulus, Depth, ConnectedVNs, #stim_spec{n
     end.
 
 
-
-zombie_wait_for_orphan_stimulations(StimulatedNeighs) ->
+zombie_wait_for_orhpan_messages(StimulatedNeighs, DiedAtDepth, VNsNotifiedOfDeath) ->
     receive
         {stimulate, Source, _Stimulus, Depth, _StimulationSpec} ->
             stimulation:send_stimulation_finished(Source, Depth),
-            zombie_wait_for_orphan_stimulations(StimulatedNeighs);
+            zombie_wait_for_orhpan_messages(StimulatedNeighs, DiedAtDepth, VNsNotifiedOfDeath);
+
         {stimulation_finished, StimulatedNode, Depth, ConfirmationCount} -> 
             NewStimulatedNeighs = case StimulatedNeighs of
                 #{Depth := {#{StimulatedNode := ConfirmationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
                     NewNeighsAtDepth = maps:remove(StimulatedNode, NeighsAtDepth),
                     if
-                        map_size(NewNeighsAtDepth) == 0 ->
+                        map_size(NewNeighsAtDepth) == 0 andalso (Depth /= DiedAtDepth orelse VNsNotifiedOfDeath =:= []) ->
                             maps:foreach(fun(Source, StimCount) -> stimulation:send_stimulation_finished(Source, Depth - 1, StimCount) end, SourcesAtDepth),
                             maps:remove(Depth, StimulatedNeighs);
                         true ->
@@ -300,6 +340,24 @@ zombie_wait_for_orphan_stimulations(StimulatedNeighs) ->
                 #{Depth := {#{StimulatedNode := StimulationCount}=NeighsAtDepth, SourcesAtDepth}} -> 
                     StimulatedNeighs#{Depth => {NeighsAtDepth#{StimulatedNode => StimulationCount - ConfirmationCount}, SourcesAtDepth}}
             end,
-            zombie_wait_for_orphan_stimulations(NewStimulatedNeighs)
+            zombie_wait_for_orhpan_messages(NewStimulatedNeighs, DiedAtDepth, VNsNotifiedOfDeath);
+
+        {on_death_confirmed_by_vn, VN} ->
+            NewVNsNotifiedOfDeath = lists:delete(VN, VNsNotifiedOfDeath),
+            
+            NewStimulatedNeighs = case StimulatedNeighs of
+                #{DiedAtDepth := {NeighsStimulatedAtDeathDepth, SourcesAtDeathDepth}} ->
+                    if
+                        map_size(NeighsStimulatedAtDeathDepth) == 0 andalso NewVNsNotifiedOfDeath =:= [] -> 
+                            maps:foreach(fun(Source, StimCount) -> stimulation:send_stimulation_finished(Source, DiedAtDepth - 1, StimCount) end, SourcesAtDeathDepth),
+                            maps:remove(DiedAtDepth, StimulatedNeighs);
+                        true ->
+                            StimulatedNeighs
+                    end;
+                _ -> StimulatedNeighs
+            end,
+                
+            zombie_wait_for_orhpan_messages(NewStimulatedNeighs, DiedAtDepth, NewVNsNotifiedOfDeath)
+
     after 5000 -> killed
     end.

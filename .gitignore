@@ -5,3 +5,4 @@ erl_crash.dump
 *.svg
 tmp/
 eflame/
+gephi-plugins/

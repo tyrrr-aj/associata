@@ -36,7 +36,7 @@ class Channel():
 
     async def send_vis_async(self, message):
         # print(f'Channel: sending message to vis: {message} (node: {_vis_node_name}, channel: {self._channel_name})')
-        await self._send(self._receiver.pid_, _vis_node_name, self._channel_name, message)
+        await self._send(self._receiver.pid_, _vis_node_name, self._channel_name, (Atom('ctrl'), message))
         # print(f'Channel: message sent to vis')
 
 

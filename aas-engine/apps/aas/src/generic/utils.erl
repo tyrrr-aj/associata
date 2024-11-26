@@ -4,8 +4,13 @@
 
 
 get_timestamp_str() ->
-    {{Year, Month, Day}, {Hour, Minute, Second}} = calendar:local_time(),
-    io_lib:format(
-        "~4..0w-~2..0w-~2..0w ~2..0w:~2..0w:~2..0w", 
-        [Year, Month, Day, Hour, Minute, Second]
-    ).
+    Nanoseconds = erlang:system_time(nanosecond),
+    MegaSecs = Nanoseconds div 1000000000000000,
+    Secs = (Nanoseconds div 1000000000) rem 1000000,
+    Nanos = Nanoseconds rem 1000000000,
+    {{Year, Month, Day}, {Hour, Minute, Second}} = 
+        calendar:now_to_universal_time({MegaSecs, Secs, 0}),
+    lists:flatten(io_lib:format(
+        "~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B:~9..0B",
+        [Year, Month, Day, Hour, Minute, Second, Nanos]
+    )).
