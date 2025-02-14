@@ -255,7 +255,7 @@ process_events(#state{
         {get_excitation, Caller, LastStimulationId} ->
             VNsResponses = case VNGType of
                 categorical -> maps:map(fun(_ReprValue, VN) -> vn:get_excitation(VN, LastStimulationId) end, VNs);
-                numerical -> #{ReprValue => vn:get_excitation(VN, LastStimulationId) || {ReprValue, VN, _Occurances} <- avb_tree:items(VNs)}    %% TODO
+                numerical -> maps:from_list([{ReprValue, vn:get_excitation(VN, LastStimulationId)} || {ReprValue, VN, _Occurances} <- avb_tree:items(VNs)])
             end,
 
             VNsExcitation = maps:filter(fun(_ReprValue, Exc) -> Exc /= none end, VNsResponses),

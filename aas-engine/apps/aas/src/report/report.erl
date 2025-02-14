@@ -66,7 +66,7 @@ report(stimulation, ExperimentStep, StimulationName, Depth, EventType, Args, Rep
     send_msg({stimulation, {ExperimentStep, StimulationName, Depth}, EventType, Args}, Reporter).
 
 
-send_msg(Msg, Reporter) -> Reporter ! {send, Msg}.
+send_msg(Msg, Reporter) -> profiling. %Reporter ! {send, Msg}.
 
 
 process_events(#{mode := Mode, structure_id := StructureId} = ReportConfig) ->

@@ -13,7 +13,9 @@
     channel, 
     last_stimulation_id=none, 
     obs_count=0, 
-    is_profiling=false
+    is_profiling=false,
+    inference_time_native=0,
+    log_file
 }).
 
 
@@ -48,7 +50,9 @@ init(StructureId) ->
     % Reporter = report:start(#{mode => silent, structure_id => StructureIdAtom}),
     GlobalCfg = #global_cfg{reporter=Reporter, dbg_counter=dbg_counter:create()},
 
-    process_events(#state{structure_id = StructureIdAtom, ong = ong:create_ONG(self(), GlobalCfg), global_cfg = GlobalCfg}).
+    {ok, LogFile} = file:open("aas_ctrl.log", [write]),
+
+    process_events(#state{structure_id = StructureIdAtom, ong = ong:create_ONG(self(), GlobalCfg), global_cfg = GlobalCfg, log_file=LogFile}).
 
 
 %% %%%%%%%%%%%%%%% Main loop %%%%%%%%%%%%%%%
@@ -76,8 +80,10 @@ process_events(State) ->
         % NodeGroupModes: #{VNGName => transitive | {responsive, excitation | value} | accumulative | passive}
         % MinPassedStimulus: float [0, 1]
         {infere, ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus} ->
-            NewState = infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, State),
-            process_events(NewState);
+            {NewState, ElapsedTimeNative} = measure(fun() -> infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, State) end),
+            NewStateTimed = NewState#state{inference_time_native = State#state.inference_time_native + ElapsedTimeNative},
+            file:write(State#state.log_file, io_lib:format("Total inference time: ~p~n", [erlang:convert_time_unit(NewStateTimed#state.inference_time_native, native, millisecond)])),
+            process_events(NewStateTimed);
 
         % InitianStimulation, NodeGroupModes, MinPassedStimulus: same as in infere
         {poison, ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, DeadlyDose, MinAccumulatedDose} ->
@@ -104,11 +110,23 @@ process_events(State) ->
             NewState = get_structure_size_impl(State),
             process_events(NewState);
 
+        get_inference_time_ms ->
+            file:write(State#state.log_file, io_lib:format("Sending inference time: ~p~n", [{inference_time_ms, erlang:convert_time_unit(State#state.inference_time_native, native, millisecond)}])),
+            pyrlang:send_client(State#state.structure_id, {inference_time_ms, erlang:convert_time_unit(State#state.inference_time_native, native, millisecond)}),
+            process_events(State);
+
         stop ->
             dbg_counter:print_report(State#state.global_cfg#global_cfg.dbg_counter),
             stop_impl(State)
     end.
 
+
+measure(Fun) ->
+    StartTime = erlang:monotonic_time(),
+    NewState = Fun(),
+    EndTime = erlang:monotonic_time(),
+    ElapsedTimeNative = EndTime - StartTime,
+    {NewState, ElapsedTimeNative}.
 
 
 add_vng_impl(Name, categorical, #state{vngs = VNGs, global_cfg = GlobalCfg} = State) ->

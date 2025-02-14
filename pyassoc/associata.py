@@ -84,6 +84,20 @@ async def stop():
         _module_initialized = False
 
 
+async def set_n_cpu_cores(n_cores):
+    global _module_initialized
+
+    if not _module_initialized:
+        raise RuntimeError('ERROR: associata module is not initialized. Call associata.init() first.')
+    
+    cmd_body = (Atom('set_n_cores'), n_cores) 
+    await _ctrl_channel.send_backend_async(cmd_body)
+
+    backend_response = await _ctrl_channel.receive_async(structure_creation_timeout_seconds)
+    if (backend_response != 'n_cores_set'):
+        raise RuntimeError('ERROR: setting number of cpu cores failed')
+
+
 async def create_agds():
     global _module_initialized
 
@@ -243,6 +257,10 @@ class AGDS(AAS):
         return await self._query_backend(Atom('get_structure_size'), self._parse_structure_size_response)
     
 
+    async def get_inference_time_ms(self):
+        return await self._query_backend(Atom('get_inference_time_ms'), self._parse_inference_time_response)
+
+
     async def export_topology(self):
         await self._channel.send_vis_async(Atom('export_topology'))
 
@@ -275,6 +293,13 @@ class AGDS(AAS):
         match message:
             case (Atom('structure_size'), size):
                 return size
+            case _:
+                return None
+            
+    def _parse_inference_time_response(self, message):
+        match message:
+            case (Atom('inference_time_ms'), inference_time_ms):
+                return inference_time_ms
             case _:
                 return None
 

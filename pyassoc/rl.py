@@ -288,7 +288,7 @@ class TD_AGDS(TD):
         )
         last_sa_search = self._add_search_from_action(action, last_sa_search)
 
-        await self.q.poison(last_sa_search, 0.6, 7.0, 3.0, self._step_nr, name)     # HYPERPARAM: min_passed_stimulus, deadly_dose, min_acc_dose
+        await self.q.poison(last_sa_search, 0.99, 3.8, 3.8, self._step_nr, name)     # HYPERPARAM: min_passed_stimulus, deadly_dose, min_acc_dose
 
 
     def _setup_search_from_state(self, state, ong_mode, action_mode, value_mode):

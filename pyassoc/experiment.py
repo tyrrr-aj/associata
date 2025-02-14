@@ -47,6 +47,7 @@ def save_reward_plot(rewards, structure_size_history, mean_width=1):
 
 async def run():
     await associata.init()
+    await associata.set_n_cpu_cores(2)
     sarsa_agds = SarsaAGDS(state_space_feature_names, state_space_bounds, state_space_epsilon, action_space, greedey_epsilon=1.0)
 
     env = gym.make("CartPole-v1", render_mode="rgb_array")
@@ -57,7 +58,7 @@ async def run():
     # start_time = datetime.datetime.now()
     # milestones = []
 
-    n_steps = 5000
+    n_steps = 3000
 
     for step_no in range(n_steps):
         action = (await sarsa_agds.step(observation, reward))[0]
@@ -85,20 +86,20 @@ async def run():
 
     # milestones.append((n_steps, datetime.datetime.now() - start_time))
 
-    await asyncio.sleep(10)
+    # await asyncio.sleep(10)
 
-    await sarsa_agds.export_topology()
+    # await sarsa_agds.export_topology()
     # await sarsa_agds.export_stimulation(20, 'pick_action')
     # await sarsa_agds.export_stimulation(20, 'last_sa_value_search')
     # await sarsa_agds.export_stimulation(20, 'next_sa_value_search')
     # await sarsa_agds.export_stimulation(20, 'poison')
 
-    await asyncio.sleep(2)
+    # await asyncio.sleep(2)
 
-    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history)
-    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=150)
-    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=350)
-    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=500)
+    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history)
+    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=150)
+    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=350)
+    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=500)
 
     # with open('experiments\\milestones.txt', 'a') as f:
     #     for n_steps, elapsed_time in milestones:

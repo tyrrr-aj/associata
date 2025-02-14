@@ -14,6 +14,7 @@ start_link() -> gen_server:start_link({local, ctrl}, ?MODULE, [], []).
 init([]) -> 
     {ok, LogFile} = file:open("aas_ctrl.log", [write]),
     file:write(LogFile, "Started\n"),
+    io:format("Number of cores: ~p~n", [erlang:system_info(schedulers_online)]),
 
     pyrlang:send_client(ctrl, started),
     
@@ -40,6 +41,12 @@ handle_info(Info, #state{log_file = LogFile, structures = Structures} = State) -
 
             AGDS = agds:create(StructureId),
             NewState = State#state{structures = maps:put(StructureId, AGDS, Structures)};
+
+        {set_n_cores, NCores} ->
+            erlang:system_flag(schedulers_online, NCores),
+            file:write(LogFile, io_lib:format("Number of cores: ~p~n", [erlang:system_info(schedulers_online)])),
+            pyrlang:send_client(ctrl, n_cores_set),
+            NewState = State;
 
         stop -> 
             gen_server:stop(?MODULE),

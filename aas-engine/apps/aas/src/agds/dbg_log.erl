@@ -3,7 +3,7 @@
 
 init() -> 
     Pid = spawn(fun() -> process_events([], false) end),
-    register(dbg_log, Pid),
+    % register(dbg_log, Pid),
     ok.
     % case file:open("backend-log.log", [write]) of
     %     {ok, _IODevice} -> ok
@@ -12,7 +12,7 @@ init() ->
 log(Msg) -> 
     % if 
     %     element(2, Msg) == "Stimulation" orelse element(3, Msg) == "value" orelse element(4, Msg) == "value" -> 
-            dbg_log ! {log, {utils:get_timestamp_str(), erlang:unique_integer([monotonic])}, Msg},
+    %        dbg_log ! {log, {utils:get_timestamp_str(), erlang:unique_integer([monotonic])}, Msg},
     %     true -> ok
     % end,
     ok.
@@ -24,7 +24,7 @@ log(Msg) ->
     % end.
 
 print() ->
-    dbg_log ! print,
+    % dbg_log ! print,
     ok.
 
 
