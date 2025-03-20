@@ -82,7 +82,6 @@ process_events(State) ->
         {infere, ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus} ->
             {NewState, ElapsedTimeNative} = measure(fun() -> infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, State) end),
             NewStateTimed = NewState#state{inference_time_native = State#state.inference_time_native + ElapsedTimeNative},
-            file:write(State#state.log_file, io_lib:format("Total inference time: ~p~n", [erlang:convert_time_unit(NewStateTimed#state.inference_time_native, native, millisecond)])),
             process_events(NewStateTimed);
 
         % InitianStimulation, NodeGroupModes, MinPassedStimulus: same as in infere
@@ -114,6 +113,11 @@ process_events(State) ->
             file:write(State#state.log_file, io_lib:format("Sending inference time: ~p~n", [{inference_time_ms, erlang:convert_time_unit(State#state.inference_time_native, native, millisecond)}])),
             pyrlang:send_client(State#state.structure_id, {inference_time_ms, erlang:convert_time_unit(State#state.inference_time_native, native, millisecond)}),
             process_events(State);
+
+        reset_inference_time ->
+            NewState = State#state{inference_time_native=0},
+            pyrlang:send_client(State#state.structure_id, inference_time_zeroed),
+            process_events(NewState);
 
         stop ->
             dbg_counter:print_report(State#state.global_cfg#global_cfg.dbg_counter),
@@ -225,6 +229,7 @@ get_neighbours_impl(on, ONIndex, #state{structure_id = StructureId, ong = ONG} =
 get_structure_size_impl(#state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
     VNGsSize = maps:fold(fun(_Name, VNG, Acc) -> Acc + vng:get_number_of_nodes(VNG) end, 0, VNGs),
     ONGSize = ong:get_number_of_nodes(ONG),
+    file:write(State#state.log_file, io_lib:format("Sending structure size: ~p~n", [VNGsSize + ONGSize])),
     pyrlang:send_client(StructureId, {structure_size, VNGsSize + ONGSize}),
     State.
     
