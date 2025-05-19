@@ -1,0 +1,548 @@
+=====================================================================
+=========================== Balanced VNGs ===========================
+=====================================================================
+
+n_vng = 20
+n_observations = 5000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 200
+
+min_passed_stimulus = 0.5
+
+n_nodes = 7951
+
+n_cores | avg_inference_time [ms]
+1   - 870.44,
+2   - 761.29,
+4   - 374.99,
+8   - 181.63,
+16  - 103.82,
+32  - 56.75,
+64  - 44.56,
+128 - 48.45,
+256 - 48.15,
+
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 10_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 400
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = False
+
+n_nodes = 15870
+
+n_cores | avg_inference_time [ms]
+1   - 1849.53,
+2   - 1161.59,
+4   - 795.51,
+8   - 358.36,
+16  - 198.06,
+32  - 106.08,
+64  - 77.30,
+128 - 92.13,
+256 - 101.49,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 15_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 800
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = False
+
+n_nodes = 26733
+
+n_cores | avg_inference_time [ms]
+1   - 2838.83,
+2   - 1768.25,
+4   - 1047.28,
+8   - 538.88,
+16  - 293.90,
+32  - 163.65,
+64  - 128.23,
+128 - 158.03,
+256 - 160.89,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 20_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 1500
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = False
+
+n_nodes = 41706
+
+n_cores | avg_inference_time [ms]
+1   - 3815.15,
+2   - 2947.29,
+4   - 1352.76,
+8   - 691.82,
+16  - 384.99,
+32  - 236.44,
+64  - 214.23,
+128 - 223.01,
+256 - 217.67,
+
+
+===============================================================================
+===============================================================================
+
+n_vng = 70
+n_observations = 5000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 200
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = False
+
+n_nodes = 15288
+
+n_cores | avg_inference_time [ms]
+1   - 6687.82,
+2   - 4150.76,
+4   - 2019.59,
+8   - 1051.13,
+16  - 569.01,
+32  - 341.28,
+64  - 343.91,
+128 - 345.65,
+256 - 419.50,
+
+
+===============================================================================
+
+n_vng = 70
+n_observations = 10_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 1000
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = False
+
+n_nodes = 60232
+
+n_cores | avg_inference_time [ms]
+1   - ,
+2   - ,
+4   - ,
+8   - ,
+16  - ,
+32  - 719.82,
+64  - 694.98,
+128 - 785.87,
+256 - 1012.31,
+
+
+=====================================================================
+======================= Half VNGs categorical =======================
+=====================================================================
+
+n_vng = 20
+n_observations = 5000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 200
+
+min_passed_stimulus = 0.5
+
+special_epsilon = None
+use_categorical = True
+
+n_nodes = 8480
+
+n_cores | avg_inference_time [ms]
+1   - 451.62,
+2   - 303.22,
+4   - 193.61,
+8   - 101.67,
+16  - 56.02,
+32  - 36.04,
+64  - 25.79,
+128 - 24.54,
+256 - 31.02,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 10_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 400
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = True
+
+n_nodes = 15870
+
+1   - 938.47,
+2   - 554.59,
+4   - 367.73,
+8   - 183.99,
+16  - 100.51,
+32  - 57.65,
+64  - 42.37,
+128 - 52.19,
+256 - 55.26,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 15_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 800
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = True
+
+n_nodes = 28883
+
+n_cores | avg_inference_time [ms]
+1   - 1424.65,
+2   - 935.04,
+4   - 555.37,
+8   - 266.26,
+16  - 153.49,
+32  - 84.91,
+64  - 71.73,
+128 - 83.10,
+256 - 89.59,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 20_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 1500
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = None
+use_categorical = True
+
+n_nodes = 45868
+
+n_cores | avg_inference_time [ms]
+1   - 1813.88,
+2   - 1076.02,
+4   - 678.38,
+8   - 348.68,
+16  - 200.55,
+32  - 119.13,
+64  - 103.67,
+128 - 125.39,
+256 - 134.04,
+
+
+=====================================================================
+=================== Big VNG: special epsilon = 0.1 ==================
+=====================================================================
+
+n_vng = 20
+n_observations = 5000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 200
+
+min_passed_stimulus = 0.5
+
+special_epsilon = 0.1
+use_categorical = False
+
+n_nodes = 9047
+
+n_cores | avg_inference_time [ms]
+1   - 1077.14,
+2   - 694.16,
+4   - 431.99,
+8   - 188.34,
+16  - 113.90,
+32  - 67.74,
+64  - 57.50,
+128 - 67.38,
+256 - 68.66,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 10_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 400
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = 0.1
+use_categorical = False
+
+n_nodes = 18055
+
+1   - 1852.04,
+2   - 1430.46,
+4   - 793.37,
+8   - 380.70,
+16  - 224.62,
+32  - 138.13,
+64  - 117.38,
+128 - 136.71,
+256 - 134.92,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 15_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 800
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = 0.1
+use_categorical = False
+
+n_nodes = 30789
+
+n_cores | avg_inference_time [ms]
+1   - 2838.56,
+2   - 1729.41,
+4   - 1274.38,
+8   - 558.69,
+16  - 324.25,
+32  - 211.67,
+64  - 202.13,
+128 - 221.39,
+256 - 223.77,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 20_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 1500
+
+min_passed_stimulus = 0.5
+
+seed = 42
+
+special_epsilon = 0.1
+use_categorical = False
+
+n_nodes = 48478
+
+n_cores | avg_inference_time [ms]
+1   - 3320.70,
+2   - 2313.70,
+4   - 1347.33,
+8   - 689.56,
+16  - 422.12,
+32  - 301.23,
+64  - 301.31,
+128 - 314.97,
+256 - 324.29,
+
+
+=====================================================================
+================ Little VNG: special epsilon = 50/100 ===============
+=====================================================================
+
+n_vng = 20
+n_observations = 5000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 200
+
+min_passed_stimulus = 0.5
+
+special_epsilon = 50
+use_categorical = False
+
+n_nodes = 7810
+
+n_cores | avg_inference_time [ms]
+1   - 863.84,
+2   - 754.25,
+4   - 406.59,
+8   - 187.00,
+16  - 99.75,
+32  - 60.14,
+64  - 42.97,
+128 - 49.08,
+256 - 54.13,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 10_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 400
+
+min_passed_stimulus = 0.5
+
+special_epsilon = 100
+use_categorical = False
+
+n_nodes = 15577
+
+1   - 2534.01,
+2   - 1572.96,
+4   - 739.77,
+8   - 359.91,
+16  - 200.27,
+32  - 111.43,
+64  - 91.49,
+128 - 105.12,
+256 - 105.50,
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 15_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 800
+
+min_passed_stimulus = 0.5
+
+special_epsilon = 200
+use_categorical = False
+
+n_nodes = 26148
+
+n_cores | avg_inference_time [ms]
+1   - 2806.19,
+2   - 2210.69,
+4   - 1065.81,
+8   - 535.86,
+16  - 296.59,
+32  - 167.06,
+64  - 140.46,
+128 - 163.94,
+256 - 164.36,
+
+
+
+===============================================================================
+
+n_vng = 20
+n_observations = 20_000
+n_inferences = 100
+
+epsilon = 1.0
+min_vn_value = 0
+max_vn_value = 1500
+
+min_passed_stimulus = 0.5
+
+special_epsilon = 400
+use_categorical = False
+
+n_nodes = 40633
+
+n_cores | avg_inference_time [ms]
+1   - 3625.74,
+2   - 2156.04,
+4   - 1332.49,
+8   - 696.90,
+16  - 380.23,
+32  - 223.25,
+64  - 194.34,
+128 - 221.63,
+256 - 213.45,
+
