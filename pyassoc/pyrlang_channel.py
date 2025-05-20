@@ -53,8 +53,8 @@ class Channel():
 
     async def _send(self, sender_pid, target_node_name, target_process_name, msg):
         await self._node.send(sender=sender_pid,
-                    receiver=(Atom(target_node_name), Atom(target_process_name)),
-                    message=msg)
+                    receiver=(Atom("proxy@Beast"), Atom('proxy')),
+                    message=((Atom(target_process_name), Atom(target_node_name)), msg))
 
 
     def close(self):

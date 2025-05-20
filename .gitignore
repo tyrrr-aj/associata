@@ -6,3 +6,4 @@ erl_crash.dump
 tmp/
 eflame/
 gephi-plugins/
+*.beam

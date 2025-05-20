@@ -9,6 +9,7 @@ import os
 import asyncio
 from enum import Enum
 import datetime
+import random
 
 
 
@@ -39,7 +40,7 @@ _next_id = 0
 #########################################################
 
 client_node_name = 'associata@Beast'
-backend_node_name = 'aas@Beast'
+backend_node_name = 'aas@asn-410'
 vis_node_name = 'aas_vis@Beast'
 
 ctrl_channel_name = 'ctrl'
@@ -51,7 +52,7 @@ cookie = 'aas_cookie'
 ######################### API ###########################
 #########################################################
 
-structure_creation_timeout_seconds = 3
+structure_creation_timeout_seconds = 10
 
 
 async def init():
@@ -62,7 +63,7 @@ async def init():
         _initializing = True
 
         _setup_ipc()
-        await _start_backend()
+        # await _start_backend()
 
         if _initializing:
             _initializing = False
@@ -73,7 +74,7 @@ async def stop():
     global _initializing, _module_initialized, _connection
     
     if _initializing or _module_initialized:
-        await _stop_backend()
+        # await _stop_backend()
 
         _ctrl_channel.close()
         pyrlang_channel.disconnect(_connection)
@@ -94,6 +95,7 @@ async def set_n_cpu_cores(n_cores):
     await _ctrl_channel.send_backend_async(cmd_body)
 
     backend_response = await _ctrl_channel.receive_async(structure_creation_timeout_seconds)
+    print('response: ', backend_response)
     if (backend_response != 'n_cores_set'):
         raise RuntimeError('ERROR: setting number of cpu cores failed')
 
@@ -118,11 +120,11 @@ async def _setup_ipc_for_structure(new_structure):
 
     cmd_body = (Atom('new_structure'), Atom(new_structure.structure_type), new_structure.id)
 
-    await _ctrl_channel.send_vis_async(cmd_body)
+    # await _ctrl_channel.send_vis_async(cmd_body)
 
-    vis_response = await new_structure._channel.receive_async(structure_creation_timeout_seconds)
-    if (vis_response != 'vis_setup_done'):
-        raise RuntimeError('ERROR: AAS visualization setup failed')
+    # vis_response = await new_structure._channel.receive_async(structure_creation_timeout_seconds)
+    # if (vis_response != 'vis_setup_done'):
+    #     raise RuntimeError('ERROR: AAS visualization setup failed')
     
 
     await _ctrl_channel.send_backend_async(cmd_body)
@@ -134,7 +136,8 @@ async def _setup_ipc_for_structure(new_structure):
 
 def _create_id(structure_type):
     global _next_id
-    id = f'{structure_type}{_next_id}'
+    #id = f'{structure_type}{_next_id}'
+    id = f'{structure_type}{random.randint(0,10000)}'
     _next_id += 1
     return id
 
@@ -169,7 +172,7 @@ class AGDS(AAS):
         
         self._inference_timeout_sec = 15
         self._poisoning_timeout_sec = 5
-        self._query_timeout_sec = 5
+        self._query_timeout_sec = 10
 
         self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: True
 
@@ -260,6 +263,9 @@ class AGDS(AAS):
     async def get_inference_time_ms(self):
         return await self._query_backend(Atom('get_inference_time_ms'), self._parse_inference_time_response)
 
+    async def reset_inference_time(self):
+        return await self._query_backend(Atom('reset_inference_time'), self._parse_reset_inference_time_response)
+
 
     async def export_topology(self):
         await self._channel.send_vis_async(Atom('export_topology'))
@@ -302,6 +308,14 @@ class AGDS(AAS):
                 return inference_time_ms
             case _:
                 return None
+            
+    def _parse_reset_inference_time_response(self, message):
+        match message:
+            case Atom('inference_time_zeroed'):
+                return True
+            case _:
+                print('Warning: inference_time_reset was not confirmed by AGDS')
+                return False
 
 
 
