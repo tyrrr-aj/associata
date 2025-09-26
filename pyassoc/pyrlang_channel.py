@@ -36,12 +36,12 @@ class Channel():
 
     async def send_vis_async(self, message):
         # print(f'Channel: sending message to vis: {message} (node: {_vis_node_name}, channel: {self._channel_name})')
-        await self._send(self._receiver.pid_, _vis_node_name, self._channel_name, (Atom('ctrl'), message))
+        await self._send(self._receiver.pid_, _vis_node_name, Atom(self._channel_name), (Atom('ctrl'), message))
         # print(f'Channel: message sent to vis')
 
 
     async def send_backend_async(self, message):
-        await self._send(self._receiver.pid_, _backend_node_name, self._channel_name, message)
+        await self._send(self._receiver.pid_, _backend_node_name, Atom(self._channel_name), message)
 
 
     async def receive_async(self, timeout):
@@ -52,9 +52,10 @@ class Channel():
             return None
 
     async def _send(self, sender_pid, target_node_name, target_process_name, msg):
+        # print(f'Channel: sending message to {target_node_name}: {msg}')
         await self._node.send(sender=sender_pid,
-                    receiver=(Atom("proxy@Beast"), Atom('proxy')),
-                    message=((Atom(target_process_name), Atom(target_node_name)), msg))
+                    receiver=(target_node_name, target_process_name),
+                    message=msg)
 
 
     def close(self):

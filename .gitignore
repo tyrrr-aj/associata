@@ -7,3 +7,5 @@ tmp/
 eflame/
 gephi-plugins/
 *.beam
+*.devcontainer
+*.pkl

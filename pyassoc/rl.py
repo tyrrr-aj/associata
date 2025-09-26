@@ -1,20 +1,27 @@
 
+from matplotlib import pyplot as plt
 import numpy as np
 import associata
 from abc import ABC, abstractmethod
 import time
+from plot_multidim import plot_3d_function_slice, plot_interactive_slices 
 
 
 class TD(ABC):
-    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1.0, greedey_epsilon=0.1):
+    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1.0, greedy_epsilon=0.1, state_space_feature_names=None):
         self._state_space_bounds = state_space_bounds
         self._state_space_epsilon = state_space_epsilon
         self._state_space_shape = np.ceil((state_space_bounds[1, :] - state_space_bounds[0, :]) / state_space_epsilon).astype('int')
         self._action_space = action_space
+
+        if state_space_feature_names is not None:
+            self._state_space_feature_names = np.array(state_space_feature_names)
+        else:
+            self._state_space_feature_names = np.array([f'state_{i}' for i in range(len(self._state_space_shape))])
         
         self._is_initialized = False
 
-        self.greedy_epsilon = greedey_epsilon
+        self.greedy_epsilon = greedy_epsilon
         self.alpha = alpha
         self.gamma = gamma
 
@@ -71,12 +78,51 @@ class TD(ABC):
         
         self._acc_reward = 0.0
 
+
+    async def plot_policy(self, state_dims=(0, 1), action_dim=0, output_file_name=None):
+        async def policy(x):
+            state = await self._get_state(x)
+            return await self._get_action(state, epsilon=0)
+
+        fig1, ax1 = await plot_3d_function_slice(
+            policy,
+            self._state_space_bounds[0, :],
+            self._state_space_bounds[1, :],
+            self._state_space_epsilon,
+            state_dims,
+            action_dim,
+            input_dim_names=self._state_space_feature_names,
+            output_dim_name='action',
+            title='Policy (3D slice)'
+        )
+
+        if output_file_name is None:
+            plt.show()
+        else:
+            plt.savefig(output_file_name + '.png')
+
+        fig2 = await plot_interactive_slices(
+            policy,
+            self._state_space_bounds[0, :], 
+            self._state_space_bounds[1, :],
+            self._state_space_epsilon,
+            state_dims,
+            action_dim,
+            input_dim_names=self._state_space_feature_names,
+            output_dim_name='action'
+        )
+
+        if output_file_name is None:
+            plt.show()
+        else:
+            plt.savefig(output_file_name + '_slices.png')
+
     @abstractmethod
     async def _get_state(self, observation):
         pass
 
     @abstractmethod
-    async def _get_action(self, state):
+    async def _get_action(self, state, epsilon=None):
         pass
 
     @abstractmethod
@@ -98,8 +144,11 @@ class Sarsa(TD):
         return np.clip(indices, np.zeros(len(self._state_space_shape)), self._state_space_shape - 1).astype('int')
 
 
-    async def _get_action(self, state):
-        if np.random.random() < self.greedy_epsilon:
+    async def _get_action(self, state, epsilon=None):
+        if epsilon is None:
+            epsilon = self.greedy_epsilon
+
+        if np.random.random() < epsilon:
             # exploratory action
             return np.array([np.random.choice(self._action_space)])
 
@@ -133,8 +182,11 @@ class QLearning(TD):
         return np.clip(indices, np.zeros(len(self._state_space_shape)), self._state_space_shape - 1).astype('int')
 
 
-    async def _get_action(self, state):
-        if np.random.random() < self.greedy_epsilon:
+    async def _get_action(self, state, epsilon=None):
+        if epsilon is None:
+            epsilon = self.greedy_epsilon
+
+        if np.random.random() < epsilon:
             # exploratory action
             return np.array([np.random.choice(self._action_space)])
 
@@ -168,10 +220,9 @@ class TD_AGDS(TD):
     async def _updated_q_value(self, last_sa_value, next_state, next_action, reward):
         pass
 
-    def __init__(self, state_space_feature_names, state_space_bounds, state_space_epsilon, action_space, alpha=0.5 , gamma=1.0, greedey_epsilon=0.1):
-        self._state_space_feature_names = state_space_feature_names
+    def __init__(self, state_space_feature_names, state_space_bounds, state_space_epsilon, action_space, alpha=0.5 , gamma=1.0, greedy_epsilon=0.1):
         self.structure_size_history = []
-        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedey_epsilon=greedey_epsilon)
+        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedy_epsilon=greedy_epsilon, state_space_feature_names=state_space_feature_names)
 
 
     async def stop(self):
@@ -196,8 +247,11 @@ class TD_AGDS(TD):
         return observation
 
 
-    async def _get_action(self, state):
-        if np.random.random() < self.greedy_epsilon:
+    async def _get_action(self, state, epsilon=None):
+        if epsilon is None:
+            epsilon = self.greedy_epsilon
+
+        if np.random.random() < epsilon:
             # exploratory action
             return self._get_random_action()
 
@@ -222,7 +276,7 @@ class TD_AGDS(TD):
     async def _init_q(self):
         self.q = await associata.create_agds()
         for f_name, f_epsilon in zip(self._state_space_feature_names, self._state_space_epsilon):
-            await self.q.add_numerical_vng(f_name, f_epsilon)
+            await self.q.add_numerical_vng(str(f_name), f_epsilon)
         await self.q.add_numerical_vng('value', 0.01)
         await self.q.add_categorical_vng('action')
 
@@ -235,8 +289,8 @@ class TD_AGDS(TD):
 
         # TODO: handles only one-dimensional action space
         # TODO: handles only float values for VNGs
-        new_observation = {vng_name: float(vng_value) for vng_name, vng_value in zip(
-                                    self._state_space_feature_names + ['value', 'action'], 
+        new_observation = {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
+                                    list(self._state_space_feature_names) + ['value', 'action'], 
                                     self._last_state.tolist() + [updated_last_sa_value, self._last_action[0]]
                                 )}
         await self.q.add_observation(new_observation, self._step_nr)
@@ -248,8 +302,8 @@ class TD_AGDS(TD):
 
         # TODO: handles only one-dimensional action space
         # TODO: handles only float values for VNGs
-        observation = {vng_name: float(vng_value) for vng_name, vng_value in zip(
-                                self._state_space_feature_names + ['value', 'action'], 
+        observation = {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
+                                list(self._state_space_feature_names) + ['value', 'action'], 
                                 state.tolist() + [value, action[0]]
                             )}
         await self.q.add_observation(observation, self._step_nr)
@@ -297,14 +351,14 @@ class TD_AGDS(TD):
             'value': value_mode,
             'action': action_mode,
         } | {
-            feature_name: associata.NodeGroupMode.transitive for feature_name in self._state_space_feature_names
+            str(feature_name): associata.NodeGroupMode.transitive for feature_name in self._state_space_feature_names
         }
         
         search = associata.StimulationSetup(node_group_modes)
         
         for f_name, f_value in zip(self._state_space_feature_names, state):
-            search.stimulate_vn(f_name, f_value)
-        
+            search.stimulate_vn(str(f_name), f_value)
+
         return search
     
 

@@ -180,7 +180,7 @@ process_events(#state{
             end,
             
             NewDepth = CurrDepth + 1,
-            NewExcitation = CurrExcitation + Stimulus,  % This line assumes that ONG CANNOT work in responsive mode!
+            NewExcitation = CurrExcitation + Stimulus,  % This line assumes that ONG CANNOT work in multiplicative mode!
 
             case maps:get(VNGName, NodeGroupModes) of
                 passive -> 

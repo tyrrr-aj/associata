@@ -132,18 +132,6 @@ process_events(#state{
                     stimulation:send_stimulation_finished(Source, CurrDepth),
                     process_events(State);
 
-                {responsive, excitation} ->
-                    case Source of
-                        ONG -> 
-                            stimulation:send_stimulation_finished(Source, CurrDepth),
-                            NewExcitation = CurrExcitation + Stimulus,
-                            report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
-                            process_events(State#state{last_stimulation_id=StimulationId, last_excitation=NewExcitation});
-                        _ ->
-                            stimulation:respond_to_stimulation(Source, Stimulus * CurrExcitation),
-                            process_events(State#state{last_stimulation_id=StimulationId})
-                    end;
-
                 CurrONGMode ->
                     EffectiveStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
@@ -154,10 +142,9 @@ process_events(#state{
                         transitive -> 
                             StimulatedVNs = if
                                 EffectiveStimulus >= MinPassedStimulus -> [
-                                    VN || {VN, {_ReprValue, VNGName}} <- maps:to_list(ConnectedVNs), 
-                                                            not ng:is_responsive(VNGName, NodeGroupModes), 
-                                                            not ng:is_transitive(VNGName, NodeGroupModes), 
-                                                            VN =/= Source];
+                                        VN || {VN, {_ReprValue, VNGName}} <- maps:to_list(ConnectedVNs), 
+                                                                            ng:is_accumulative(VNGName, NodeGroupModes)
+                                    ];
                                 true -> []
                             end,
 

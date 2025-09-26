@@ -20,7 +20,7 @@ class Ctrl:
         self._connection = pyrlang_channel.connect(self._vis_node_name, self._cookie)
         self._ctrl_channel = pyrlang_channel.Channel(self._connection, 'ctrl', self._client_node_name)
 
-        await self._ctrl_channel.send(Atom('started'))
+        # await self._ctrl_channel.send(Atom('started'))
 
         while (cmd := await self._ctrl_channel.receive_async()) != Atom('stop'):
             await self.on_ctrl_message(cmd)

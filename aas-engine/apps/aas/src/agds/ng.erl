@@ -1,7 +1,7 @@
 -module(ng).
 % ng is an abbreviation for Node Group
 
--export([is_responsive/2, is_transitive/2]).
+-export([is_responsive/2, is_transitive/2, is_accumulative/2]).
 
 
 
@@ -15,6 +15,13 @@ is_responsive(NodeGroupName, NodeGroupModes) ->
 is_transitive(NodeGroupName, NodeGroupModes) ->
     case maps:get(NodeGroupName, NodeGroupModes) of
         transitive -> true;
+        _ -> false
+    end.
+
+
+is_accumulative(NodeGroupName, NodeGroupModes) ->
+    case maps:get(NodeGroupName, NodeGroupModes) of
+        accumulative -> true;
         _ -> false
     end.
 

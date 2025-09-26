@@ -1,12 +1,7 @@
-from unittest import result
 import pyrlang_channel
 from term import Atom
 import subprocess
-import atexit
-import uuid
-import parse
 import os
-import asyncio
 from enum import Enum
 import datetime
 import random
@@ -40,7 +35,7 @@ _next_id = 0
 #########################################################
 
 client_node_name = 'associata@Beast'
-backend_node_name = 'aas@asn-410'
+backend_node_name = 'aas@Beast'
 vis_node_name = 'aas_vis@Beast'
 
 ctrl_channel_name = 'ctrl'
@@ -63,7 +58,7 @@ async def init():
         _initializing = True
 
         _setup_ipc()
-        # await _start_backend()
+        await _start_backend()
 
         if _initializing:
             _initializing = False
@@ -74,7 +69,7 @@ async def stop():
     global _initializing, _module_initialized, _connection
     
     if _initializing or _module_initialized:
-        # await _stop_backend()
+        await _stop_backend()
 
         _ctrl_channel.close()
         pyrlang_channel.disconnect(_connection)
@@ -120,11 +115,11 @@ async def _setup_ipc_for_structure(new_structure):
 
     cmd_body = (Atom('new_structure'), Atom(new_structure.structure_type), new_structure.id)
 
-    # await _ctrl_channel.send_vis_async(cmd_body)
+    await _ctrl_channel.send_vis_async(cmd_body)
 
-    # vis_response = await new_structure._channel.receive_async(structure_creation_timeout_seconds)
-    # if (vis_response != 'vis_setup_done'):
-    #     raise RuntimeError('ERROR: AAS visualization setup failed')
+    vis_response = await new_structure._channel.receive_async(structure_creation_timeout_seconds)
+    if (vis_response != 'vis_setup_done'):
+        raise RuntimeError('ERROR: AAS visualization setup failed')
     
 
     await _ctrl_channel.send_backend_async(cmd_body)
@@ -421,16 +416,18 @@ async def _start_backend():
     global _aas_proc, _aas_log, _asvis_proc, _asvis_log, _aas_log_err, _asvis_log_err
 
     try:
-        _asvis_proc, _asvis_log, _asvis_log_err = await _start_subprocess(
-            # [R'C:\Users\adams\Doktorat\aasociata\asvis\asvis.cmd', R'C:\Users\adams\Doktorat\aasociata\pyassoc\experiments', client_node_name, vis_node_name, cookie], 
-            [R'python', R'C:\Users\adams\Doktorat\aasociata\asvis\src\asvis.py', R'C:\Users\adams\Doktorat\aasociata\pyassoc\experiments', client_node_name, vis_node_name, cookie], 
-            vis_start_timeout_seconds, 
-            'vis')
+        # _asvis_proc, _asvis_log, _asvis_log_err = await _start_subprocess(
+        #     # [R'C:\Users\adams\Doktorat\aasociata\asvis\asvis.cmd', R'C:\Users\adams\Doktorat\aasociata\pyassoc\experiments', client_node_name, vis_node_name, cookie], 
+        #     [R'python', R'C:\Users\adams\Doktorat\aasociata\asvis\src\asvis.py', R'C:\Users\adams\Doktorat\aasociata\pyassoc\experiments', client_node_name, vis_node_name, cookie], 
+        #     vis_start_timeout_seconds, 
+        #     'vis')
         
-        _aas_proc, _aas_log, _aas_log_err = await _start_subprocess(
-            [R'C:\Users\adams\Doktorat\aasociata\aas-engine\_build\default\rel\aas\bin\aas.cmd', 'foreground'], 
-            backend_start_timeout_seconds, 
-            'backend')
+        # _aas_proc, _aas_log, _aas_log_err = await _start_subprocess(
+        #     [R'C:\Users\adams\Doktorat\aasociata\aas-engine\_build\default\rel\aas\bin\aas.cmd', 'foreground'], 
+        #     backend_start_timeout_seconds, 
+        #     'backend')
+
+        ...
         
     except RuntimeError as e:
         print(f'ERROR: Failed to start backend: {e}')
@@ -440,16 +437,16 @@ async def _start_backend():
 async def _stop_backend():
     global _ctrl_channel, _aas_proc, _asvis_proc
 
-    await _ctrl_channel.send_backend_async(Atom('stop'))
-    await _ctrl_channel.send_vis_async(Atom('stop'))
+    # await _ctrl_channel.send_backend_async(Atom('stop'))
+    # await _ctrl_channel.send_vis_async(Atom('stop'))
 
-    if _aas_proc is not None:
-        _stop_subprocess(_aas_proc, backend_stop_timeout_seconds, 'backend')
-        _aas_proc = None
+    # if _aas_proc is not None:
+    #     _stop_subprocess(_aas_proc, backend_stop_timeout_seconds, 'backend')
+    #     _aas_proc = None
 
-    if _asvis_proc is not None:
-        _stop_subprocess(_asvis_proc, vis_stop_timeout_seconds, 'vis')
-        _asvis_proc = None
+    # if _asvis_proc is not None:
+    #     _stop_subprocess(_asvis_proc, vis_stop_timeout_seconds, 'vis')
+    #     _asvis_proc = None
 
 
 async def _start_subprocess(cmd, timeout_seconds, name):

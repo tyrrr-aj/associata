@@ -47,8 +47,8 @@ def save_reward_plot(rewards, structure_size_history, mean_width=1):
 
 async def run():
     await associata.init()
-    await associata.set_n_cpu_cores(2)
-    sarsa_agds = SarsaAGDS(state_space_feature_names, state_space_bounds, state_space_epsilon, action_space, greedey_epsilon=1.0)
+    await associata.set_n_cpu_cores(16)
+    sarsa_agds = SarsaAGDS(state_space_feature_names, state_space_bounds, state_space_epsilon, action_space)
 
     env = gym.make("CartPole-v1", render_mode="rgb_array")
     observation, info = env.reset(seed=42)
@@ -58,7 +58,7 @@ async def run():
     # start_time = datetime.datetime.now()
     # milestones = []
 
-    n_steps = 3000
+    n_steps = 100
 
     for step_no in range(n_steps):
         action = (await sarsa_agds.step(observation, reward))[0]
@@ -73,12 +73,12 @@ async def run():
         # if step_no % 1000 == 0:
         #     milestones.append((step_no, datetime.datetime.now() - start_time))
 
-        if True: #step_no > 1000:
-            # await asyncio.sleep(3)
-            # await sarsa_agds.export_stimulation(step_no, 'pick_action')
-            # await sarsa_agds.export_stimulation(step_no, 'last_sa_value_search')
-            # await sarsa_agds.export_stimulation(step_no, 'next_sa_value_search')
-            # await sarsa_agds.export_stimulation(step_no, 'poison')
+        # if True: #step_no > 1000:
+        #     await asyncio.sleep(3)
+        #     await sarsa_agds.export_stimulation(step_no, 'pick_action')
+        #     await sarsa_agds.export_stimulation(step_no, 'last_sa_value_search')
+        #     await sarsa_agds.export_stimulation(step_no, 'next_sa_value_search')
+        #     await sarsa_agds.export_stimulation(step_no, 'poison')
             ...
 
     await sarsa_agds.reset_episode(save_score=False)
@@ -86,24 +86,34 @@ async def run():
 
     # milestones.append((n_steps, datetime.datetime.now() - start_time))
 
-    # await asyncio.sleep(10)
+    await asyncio.sleep(10)
 
-    # await sarsa_agds.export_topology()
-    # await sarsa_agds.export_stimulation(20, 'pick_action')
-    # await sarsa_agds.export_stimulation(20, 'last_sa_value_search')
-    # await sarsa_agds.export_stimulation(20, 'next_sa_value_search')
-    # await sarsa_agds.export_stimulation(20, 'poison')
+    await sarsa_agds.export_topology()
+    await sarsa_agds.export_stimulation(20, 'pick_action')
+    await sarsa_agds.export_stimulation(20, 'last_sa_value_search')
+    await sarsa_agds.export_stimulation(20, 'next_sa_value_search')
+    await sarsa_agds.export_stimulation(20, 'poison')
 
-    # await asyncio.sleep(2)
+    await asyncio.sleep(2)
 
-    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history)
-    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=150)
-    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=350)
-    # save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=500)
+    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history)
+    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=150)
+    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=350)
+    save_reward_plot(sarsa_agds.episode_rewards, sarsa_agds.structure_size_history, mean_width=500)
 
     # with open('experiments\\milestones.txt', 'a') as f:
     #     for n_steps, elapsed_time in milestones:
     #         f.write(f'{n_steps}: {int(elapsed_time)}s\n')
+
+    day_dir = f'experiments\\{datetime.datetime.now().strftime("%Y-%m-%d")}'
+    day_subdirs = [d for d in os.listdir(day_dir) if os.path.isdir(os.path.join(day_dir, d))] if os.path.exists(day_dir) else []
+    matching_day_subdirs = [d for d in day_subdirs if f'agds[{sarsa_agds.q.id}]' in d]
+
+    if matching_day_subdirs:
+        exp_dir = matching_day_subdirs[-1]
+        await sarsa_agds.plot_policy(state_dims=(2, 3), action_dim=0, output_file_name=f'{exp_dir}\\policy')
+    else:
+        print(f'Could not find existing subdirectory for SarsaAGDS: {sarsa_agds.q.id}.')
 
     await sarsa_agds.stop()
     await associata.stop()

@@ -53,12 +53,14 @@ class Channel():
 
 
     async def send(self, message):
+        # print(f'Sending msg {message} to {(self._remote_node_name, self._channel_name)}')
         await self._node.send(sender=self._sender_pid,
                     receiver=(Atom(self._remote_node_name), Atom(self._channel_name)),
                     message=message)
         
     
     async def send_self(self, message):
+        # print(f'Sending msg {message} to {self._receiver.pid}')
         await self._node.send(sender=self._sender_pid,
                     receiver=self._receiver.pid_,
                     message=message)
@@ -81,7 +83,7 @@ class Receiver(Process):
         self._semaphore = semaphore
     
     def handle_one_inbox_message(self, msg):
-        print(f'Msg received: {msg}')
+        # print(f'Msg received: {msg}')
         self._buffer.append(msg)
         self._semaphore.release()
 

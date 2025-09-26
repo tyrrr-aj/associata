@@ -12,9 +12,9 @@ start_link() -> gen_server:start_link({local, ctrl}, ?MODULE, [], []).
 
 
 init([]) -> 
-    % {ok, LogFile} = file:open("aas_ctrl.log", [write]),
-    % file:write(LogFile, "Started\n"),
-    LogFile = none,
+    {ok, LogFile} = file:open("aas_ctrl.log", [write]),
+    file:write(LogFile, "Started\n"),
+    % LogFile = none,
     io:format("Number of cores: ~p~n", [erlang:system_info(schedulers_online)]),
 
     pyrlang:send_client(ctrl, started),
@@ -31,21 +31,21 @@ handle_cast(_Cmd, State) ->
 
 
 handle_info(Info, #state{log_file = LogFile, structures = Structures} = State) ->
-    % file:write(LogFile, io_lib:format("Received ctrl message: ~p~n", [Info])),
+    file:write(LogFile, io_lib:format("Received ctrl message: ~p~n", [Info])),
 
     case Info of
         subscription_init_ok ->
             NewState = State;
 
         {new_structure, agds, StructureId} -> 
-            % file:write(LogFile, io_lib:format("Received new_structure message: ~p~n", [agds])),
+            file:write(LogFile, io_lib:format("Received new_structure message: ~p~n", [agds])),
 
             AGDS = agds:create(StructureId),
             NewState = State#state{structures = maps:put(StructureId, AGDS, Structures)};
 
         {set_n_cores, NCores} ->
             erlang:system_flag(schedulers_online, NCores),
-            % file:write(LogFile, io_lib:format("Number of cores: ~p~n", [erlang:system_info(schedulers_online)])),
+            file:write(LogFile, io_lib:format("Number of cores: ~p~n", [erlang:system_info(schedulers_online)])),
             pyrlang:send_client(ctrl, n_cores_set),
             NewState = State;
 
