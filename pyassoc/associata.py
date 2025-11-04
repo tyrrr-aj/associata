@@ -95,7 +95,7 @@ async def set_n_cpu_cores(n_cores):
         raise RuntimeError('ERROR: setting number of cpu cores failed')
 
 
-async def create_agds():
+async def create_agds(save_stimulations_in_step=None):
     global _module_initialized
 
     if not _module_initialized:
@@ -104,7 +104,7 @@ async def create_agds():
     new_agds_id = _create_id('agds')
     new_agds_channel = pyrlang_channel.Channel(_connection, new_agds_id)
 
-    new_agds = AGDS(new_agds_id, new_agds_channel)
+    new_agds = AGDS(new_agds_id, new_agds_channel, save_stimulations_in_step)
 
     await _setup_ipc_for_structure(new_agds)
     return new_agds
@@ -169,7 +169,7 @@ class AGDS(AAS):
         self._poisoning_timeout_sec = 5
         self._query_timeout_sec = 10
 
-        self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: True
+        self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: exp_step % 100 == 0
 
     async def add_numerical_vng(self, name, epsilon):
         await self._channel.send_backend_async((

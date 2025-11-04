@@ -463,13 +463,15 @@ weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
     1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
 
 
-weight_vn_to_on(ConnectedONs, EntireVNGConnCount) ->
-    VNConnCount = maps:size(ConnectedONs),
+% weight_vn_to_on(ConnectedONs, EntireVNGConnCount) ->
+%     VNConnCount = maps:size(ConnectedONs),
 
-    if 
-        EntireVNGConnCount == VNConnCount -> 0.0;
-        true -> (EntireVNGConnCount - maps:size(ConnectedONs)) / EntireVNGConnCount
-    end.
+%     if 
+%         EntireVNGConnCount == VNConnCount -> 0.0;
+%         true -> (EntireVNGConnCount - maps:size(ConnectedONs)) / EntireVNGConnCount
+%     end.
+
+weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 1 / maps:size(ConnectedONs).
 
 
 report_breaking_connection(none, _NewConnectedVN, _ExperimentStep, _GlobalCfg) -> ok;

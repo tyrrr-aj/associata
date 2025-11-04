@@ -1,3 +1,24 @@
+Bezwładność struktury - upieranie się w danym okresie przy jednej decyzji - to prosta pochodna zapamiętywania kolejnych wyborów i mechanizmu zapominania.
+Po wybraniu akcji A1 w stanie S1, w następnym - podobnym - stanie S2 akcja A1 będzie wzmacniana mocniej niż była (chyba że udało się wytruć odpowiednio dużo ON, ale jeżeli padło ich tak dużo, to struktura na bank zapomina za szybko).
+Trzeba to matematycznie zrównoważyć, tzn,:
+- wstawienie wspomnienia S1A1 musi wywołać łączne zatrucie innych wspomnień o takiej łącznej wartości, żeby dokładnie wyrównać siłę skojarzenia S1 z S1A1;
+- przy wyborze akcji siła pobudzeń przechodzacych przez ON musi być odwrotnie proporcjonalna do ich poziomu zatrucia.
+Tylko jak to wyrównać, jeżeli:
+- pobudzenia rozchodzą się inaczej przy poisoningu i wyborze akcji (różne tryby działania grup wierzchołków),
+- siła pobudzeń może się zmieniać w zależności od zmian struktury 
+    (dodawania kolejnych wspomnień - zmiana zakresu znanych wartości akcji, zmiana wag VN->ON).
+Czy wystarczy wyrównanie dla obecnej chwili?
+
+A może wystarczą oryginalne wagi połączeń VN->ON..?
+Nie, bo zmiana wag była kluczowa dla poisoningu - przy oryginalnych wagach wraz z dokładaniem kolejnych wierzchołków zmniejsza się pobudzenie każdego indywidualnego wierzchołka, co (1) tworzy dodatnie sprzężenie zwrotne w poisoningu (nie zapomniałeś -> mniej zapominaj) oraz zabija próg pewności przy wyborze akcji.
+
+Nowe wagi połączeń zapewniają, że przy poisoningu nowy ON w tym samym stanie S nie osłabia aż tak bardzo skojarzenia z istniejącymi ON w stanie S. Ale mają sporo wad - siła tego skojarzenia trochę się jednak zmniejsza, i całość nie działa przy tylko jednym istniejącym stanie. Do tego powyższe...
+
+Czy da się zrobić poisoning na klasycznych wagach połączeń? A może te wagi powinny się zmieniać tylko na czas poisoningu - np. na stałą wartość 1?
+
+
+ 
+
 Sposób uruchomienia całości:
 - albo wywołanie Erlanga z pythona (najpewniej przez command line)
 - albo osobny .bat odpalający całość

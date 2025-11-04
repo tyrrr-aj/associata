@@ -34,6 +34,8 @@ class TD(ABC):
 
         self._time_origin = time.time()
 
+        self._actions_taken_history = []
+
 
     def _timestamp(self):
         return f'[{int(time.time() - self._time_origin)}s]'
@@ -51,6 +53,7 @@ class TD(ABC):
         # print(f'{self._timestamp()} State: {state}\nReward (for prevoius action): {reward}\n')
 
         action = await self._get_action(state)
+        self._actions_taken_history.append(action)
 
         print(f'{self._timestamp()} Picked action: {action}')
 
@@ -139,6 +142,11 @@ class TD(ABC):
 
 
 class Sarsa(TD):
+    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1, greedy_epsilon=0.1, state_space_feature_names=None):
+        self._dont_know_history = []
+        self._exploratory_action_history = []
+        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha, gamma, greedy_epsilon, state_space_feature_names)
+
     async def _get_state(self, observation):
         indices = np.floor((observation - self._state_space_bounds[0, :]) / self._state_space_epsilon)
         return np.clip(indices, np.zeros(len(self._state_space_shape)), self._state_space_shape - 1).astype('int')
@@ -150,17 +158,24 @@ class Sarsa(TD):
 
         if np.random.random() < epsilon:
             # exploratory action
+            self._dont_know_history.append(0)
+            self._exploratory_action_history.append(1)
             return np.array([np.random.choice(self._action_space)])
 
         else:
             # exploiting action
+            self._exploratory_action_history.append(0)
+
             action_values = self.q[*state, :]
             max_action_value = np.max(action_values)
             max_actions = np.argwhere(action_values == max_action_value)
             if (len(max_actions) > 1):
                 action_index = np.random.randint(max_actions.shape[0])
+
+                self._dont_know_history.append(1)
             else:
                 action_index = 0
+                self._dont_know_history.append(0)
             return max_actions[action_index]
         
 
@@ -220,8 +235,38 @@ class TD_AGDS(TD):
     async def _updated_q_value(self, last_sa_value, next_state, next_action, reward):
         pass
 
-    def __init__(self, state_space_feature_names, state_space_bounds, state_space_epsilon, action_space, alpha=0.5 , gamma=1.0, greedy_epsilon=0.1):
+    def __init__(
+        self,
+        state_space_feature_names,
+        state_space_bounds,
+        state_space_epsilon,
+        action_space,
+        alpha=0.5,
+        gamma=1.0,
+        greedy_epsilon=0.1,
+        save_stimulations_in_step=None,
+        min_passed_stimulus_vng=0.6,
+        min_vn_excitation=0.2,
+        min_passed_stimulus_ong=0.15,
+        min_on_excitation=0.5,
+        poison_min_passed_stimulus=0.99,
+        poison_deadly_dose=3.8,
+        poison_min_acc_dose=3.8
+    ):
         self.structure_size_history = []
+        self._save_stimulations_in_step = save_stimulations_in_step
+        self._dont_know_history = []
+        self._exploratory_action_history = []
+
+        # HYPERPARAMETERS (extracted for external modification)
+        self.min_passed_stimulus_vng = min_passed_stimulus_vng
+        self.min_vn_excitation = min_vn_excitation
+        self.min_passed_stimulus_ong = min_passed_stimulus_ong
+        self.min_on_excitation = min_on_excitation
+        self.poison_min_passed_stimulus = poison_min_passed_stimulus
+        self.poison_deadly_dose = poison_deadly_dose
+        self.poison_min_acc_dose = poison_min_acc_dose
+
         super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedy_epsilon=greedy_epsilon, state_space_feature_names=state_space_feature_names)
 
 
@@ -253,9 +298,13 @@ class TD_AGDS(TD):
 
         if np.random.random() < epsilon:
             # exploratory action
+            self._dont_know_history.append(0)
+            self._exploratory_action_history.append(1)
             return self._get_random_action()
 
         else:
+            self._exploratory_action_history.append(0)
+
             # exploiting action
             best_sa = await self._search_for_best_action(state, 'pick_action')
 
@@ -274,7 +323,7 @@ class TD_AGDS(TD):
         
 
     async def _init_q(self):
-        self.q = await associata.create_agds()
+        self.q = await associata.create_agds(save_stimulations_in_step=self._save_stimulations_in_step)
         for f_name, f_epsilon in zip(self._state_space_feature_names, self._state_space_epsilon):
             await self.q.add_numerical_vng(str(f_name), f_epsilon)
         await self.q.add_numerical_vng('value', 0.01)
@@ -317,7 +366,13 @@ class TD_AGDS(TD):
             value_mode=associata.NodeGroupMode.accumulative
         )
         sa_value_search = self._add_search_from_action(action, sa_value_search)
-        sa_value = await self._infere_and_get_max_from_vng('value', sa_value_search, 0.6, 0.2, stimulation_name)   # HYPERPARAM: min_passed_stimulus, min_vn_excitation
+        sa_value = await self._infere_and_get_max_from_vng(
+            'value',
+            sa_value_search,
+            self.min_passed_stimulus_vng,
+            self.min_vn_excitation,
+            stimulation_name
+        )
 
         return float(sa_value) if sa_value is not None else 0.0
 
@@ -330,7 +385,12 @@ class TD_AGDS(TD):
             value_mode=associata.NodeGroupMode.responsive_value
         )
 
-        return await self._infere_and_get_max_from_ong(best_action_search, 0.15, 0.15, stimulation_name) # HYPERPARAM: min_passed_stimulus, min_on_excitation
+        return await self._infere_and_get_max_from_ong(
+            best_action_search,
+            self.min_passed_stimulus_ong,
+            self.min_on_excitation,
+            stimulation_name
+        )
     
 
     async def _poison(self, state, action, name='poison'):
@@ -342,7 +402,14 @@ class TD_AGDS(TD):
         )
         last_sa_search = self._add_search_from_action(action, last_sa_search)
 
-        await self.q.poison(last_sa_search, 0.99, 3.8, 3.8, self._step_nr, name)     # HYPERPARAM: min_passed_stimulus, deadly_dose, min_acc_dose
+        await self.q.poison(
+            last_sa_search,
+            self.poison_min_passed_stimulus,
+            self.poison_deadly_dose,
+            self.poison_min_acc_dose,
+            self._step_nr,
+            name
+        )
 
 
     def _setup_search_from_state(self, state, ong_mode, action_mode, value_mode):
@@ -380,7 +447,14 @@ class TD_AGDS(TD):
         excitations = await self.q.get_excitations_for_ong()
         important_excitations = {k: v for k, v in excitations.items() if v > min_on_excitation}
 
-        return self._get_maximizing_key(important_excitations)
+        strongest_excited_on = self._get_maximizing_key(important_excitations)
+
+        if len([v for v in important_excitations.values() if v == important_excitations.get(strongest_excited_on, -1)]) != 1:
+            self._dont_know_history.append(1)
+        else:
+            self._dont_know_history.append(0)
+
+        return strongest_excited_on
 
     
     def _get_maximizing_key(self, excitations):
