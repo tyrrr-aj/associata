@@ -245,13 +245,16 @@ class TD_AGDS(TD):
         gamma=1.0,
         greedy_epsilon=0.1,
         save_stimulations_in_step=None,
-        min_passed_stimulus_vng=0.6,
-        min_vn_excitation=0.2,
-        min_passed_stimulus_ong=0.15,
-        min_on_excitation=0.5,
-        poison_min_passed_stimulus=0.99,
-        poison_deadly_dose=3.8,
-        poison_min_acc_dose=3.8
+        min_passed_stimulus_vng=0.0,
+        min_vn_excitation=0.0,
+        min_passed_stimulus_ong=0.0,
+        min_on_excitation=0.0,
+        poison_min_passed_stimulus=0.0,
+        poison_deadly_dose=None,
+        poison_min_acc_dose=0.0,
+        value_epsilon=0.01,
+        min_value=0.0,
+        max_value=1.0
     ):
         self.structure_size_history = []
         self._save_stimulations_in_step = save_stimulations_in_step
@@ -264,8 +267,11 @@ class TD_AGDS(TD):
         self.min_passed_stimulus_ong = min_passed_stimulus_ong
         self.min_on_excitation = min_on_excitation
         self.poison_min_passed_stimulus = poison_min_passed_stimulus
-        self.poison_deadly_dose = poison_deadly_dose
+        self.poison_deadly_dose = poison_deadly_dose if poison_deadly_dose is not None else float(len(state_space_feature_names))
         self.poison_min_acc_dose = poison_min_acc_dose
+        self.value_epsilon = value_epsilon
+        self.min_value = min_value
+        self.max_value = max_value
 
         super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedy_epsilon=greedy_epsilon, state_space_feature_names=state_space_feature_names)
 
@@ -324,9 +330,9 @@ class TD_AGDS(TD):
 
     async def _init_q(self):
         self.q = await associata.create_agds(save_stimulations_in_step=self._save_stimulations_in_step)
-        for f_name, f_epsilon in zip(self._state_space_feature_names, self._state_space_epsilon):
-            await self.q.add_numerical_vng(str(f_name), f_epsilon)
-        await self.q.add_numerical_vng('value', 0.01)
+        for f_name, f_epsilon, f_bounds in zip(self._state_space_feature_names, self._state_space_epsilon, self._state_space_bounds.T):
+            await self.q.add_numerical_vng(str(f_name), f_epsilon, f_bounds[0], f_bounds[1])
+        await self.q.add_numerical_vng('value', self.value_epsilon, self.min_value, self.max_value)
         await self.q.add_categorical_vng('action')
 
 

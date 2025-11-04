@@ -66,8 +66,8 @@ process_events(State) ->
             NewState = add_vng_impl(Name, categorical, State),
             process_events(NewState);
 
-        {add_vng, Name, numerical, Epsilon} ->
-            NewState = add_vng_impl(Name, numerical, Epsilon, State),
+        {add_vng, Name, numerical, Epsilon, MinValue, MaxValue} ->
+            NewState = add_vng_impl(Name, numerical, Epsilon, MinValue, MaxValue, State),
             process_events(NewState);
 
         %% Values: #{VNGName := ObservedValue}
@@ -136,8 +136,8 @@ measure(Fun) ->
 add_vng_impl(Name, categorical, #state{vngs = VNGs, global_cfg = GlobalCfg} = State) ->
     State#state{vngs = VNGs#{Name => vng:create_categorical_VNG(Name, self(), GlobalCfg)}}.
 
-add_vng_impl(Name, numerical, Epsilon, #state{vngs = VNGs, global_cfg = GlobalCfg} = State) ->
-    State#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, self(), GlobalCfg)}}.
+add_vng_impl(Name, numerical, Epsilon, MinValue, MaxValue, #state{vngs = VNGs, global_cfg = GlobalCfg} = State) ->
+    State#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, MinValue, MaxValue, self(), GlobalCfg)}}.
 
 
 add_observation_impl(ExperimentStep, Values, #state{vngs = VNGs, ong = ONG, obs_count = ObsCount} = State) ->

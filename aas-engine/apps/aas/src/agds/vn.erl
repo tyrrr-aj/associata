@@ -5,7 +5,6 @@
         disconnect_ON/3,
         disconnect_VN/6,
         confirm_vn_disconnected/3,
-        update_VNG_range/3, 
         update_VNG_to_ON_conn_count/2,
         stimulate/4, 
         get_excitation/2,
@@ -67,9 +66,6 @@ disconnect_ON(ThisVN, ON, ExperimentStep) -> ThisVN ! {disconnect_ON, ON, Experi
 disconnect_VN(ThisVN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep) -> ThisVN ! {disconnect_VN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep}.
 
 confirm_vn_disconnected(ThisVN, VN, IntermediateZombies) -> ThisVN ! {confirm_vn_disconnected, VN, IntermediateZombies}.
-
-
-update_VNG_range(ThisVN, NewVNGMinValue, NewVNGMaxValue) -> ThisVN ! {update_VNG_range, NewVNGMinValue, NewVNGMaxValue}.
 
 
 update_VNG_to_ON_conn_count(ThisVN, NewEntireVNGConnCount) -> ThisVN ! {update_VNG_to_ON_conn_count, NewEntireVNGConnCount}.
@@ -412,10 +408,6 @@ process_events(#state{
                 {ReplVN, _ReplVNValue} -> report:connection_formed(self(), ReplVN, ExperimentStep, Reporter)
             end,
             process_events(State#state{connected_vns=NewConnectedVNs});
-
-
-        {update_VNG_range, NewVNGMinValue, NewVNGMaxValue} -> 
-            process_events(State#state{vng_min_value=NewVNGMinValue, vng_max_value=NewVNGMaxValue});
 
 
         {update_VNG_to_ON_conn_count, NewEntireVNGConnCount} ->

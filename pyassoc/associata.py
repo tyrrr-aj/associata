@@ -171,12 +171,14 @@ class AGDS(AAS):
 
         self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: exp_step % 100 == 0
 
-    async def add_numerical_vng(self, name, epsilon):
+    async def add_numerical_vng(self, name, epsilon, min_value, max_value):
         await self._channel.send_backend_async((
             Atom('add_vng'), 
             name, 
             Atom('numerical'), 
             float(epsilon), 
+            float(min_value),
+            float(max_value)
         ))
 
     async def add_categorical_vng(self, name):
