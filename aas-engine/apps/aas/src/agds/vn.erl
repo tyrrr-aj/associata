@@ -217,7 +217,7 @@ process_events(#state{
                         accumulative -> [];
                         transitive -> lists:foldl(
                                 fun({VN, NeighValue}, Acc) ->
-                                    NeighStimulus = Stimulus * weight_vn_to_vn(NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue),
+                                    NeighStimulus = lists:max([0, Stimulus - weight_vn_to_vn(NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue)]),
                                     if 
                                         NeighStimulus >= MinPassedStimulus -> 
                                             vn:stimulate(VN, NeighStimulus, NewDepth, StimulationSpec),
@@ -231,10 +231,7 @@ process_events(#state{
                         end,
 
                     % VN -> ON
-                    ONStimulus = case StimulationKind of
-                        poisoning -> Stimulus; % * (1.0 - weight_vn_to_on(ConnectedONs, EntireVNGConnCount));
-                        _ -> Stimulus * weight_vn_to_on(ConnectedONs, EntireVNGConnCount)
-                    end,
+                    ONStimulus = Stimulus * weight_vn_to_on(ConnectedONs, EntireVNGConnCount),
 
                     StimulatedONs = case CurrVNGMode of
                         accumulative -> [];
@@ -455,15 +452,7 @@ weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
     1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
 
 
-% weight_vn_to_on(ConnectedONs, EntireVNGConnCount) ->
-%     VNConnCount = maps:size(ConnectedONs),
-
-%     if 
-%         EntireVNGConnCount == VNConnCount -> 0.0;
-%         true -> (EntireVNGConnCount - maps:size(ConnectedONs)) / EntireVNGConnCount
-%     end.
-
-weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 1 / maps:size(ConnectedONs).
+weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 1.
 
 
 report_breaking_connection(none, _NewConnectedVN, _ExperimentStep, _GlobalCfg) -> ok;
