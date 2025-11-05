@@ -133,7 +133,11 @@ process_events(#state{
                     process_events(State);
 
                 CurrONGMode ->
-                    EffectiveStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
+                    PoisonedStimulus = case StimulationKind of
+                        poisoning -> Stimulus;
+                        _ -> weight_poisoning(Stimulus)
+                    end,
+                    EffectiveStimulus = amplify_stimulus_with_responsive_vns(PoisonedStimulus, NewDepth, ConnectedVNs, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
 
                     report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
@@ -285,6 +289,9 @@ process_events(#state{
             
     end.
 
+
+
+weight_poisoning(PoisonLvl) -> PoisonLvl.
 
 
 amplify_stimulus_with_responsive_vns(Stimulus, Depth, ConnectedVNs, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec) ->
