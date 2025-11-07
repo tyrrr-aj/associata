@@ -1,5 +1,5 @@
 -module(vng).
--export([create_numerical_VNG/4, create_categorical_VNG/3, add_value/5, wait_for_value_added/1, stimulate/3, get_excitation/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
+-export([create_numerical_VNG/6, create_categorical_VNG/3, add_value/5, wait_for_value_added/1, stimulate/3, get_excitation/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
 -export([remove_killed_vn/3, notify_VNG_to_ON_conn_count_incremented/1, notify_VNG_to_ON_conn_count_decremented/1]).
 -export([reset_after_deadlock/1]).
 -export([print_neighbourhoods/1]).
@@ -97,7 +97,7 @@ init(categorical, VNGName, no_epsilon, AGDS, GlobalCfg) ->
         stimulated_vns=sets:new(),
         agds=AGDS, 
         global_cfg=GlobalCfg
-    });
+    }).
 
 init(numerical, VNGName, Epsilon, MinValue, MaxValue, AGDS, GlobalCfg) ->
     report_vng_creation(numerical, VNGName, GlobalCfg),
@@ -147,12 +147,12 @@ process_events(#state{
                     case maps:find(AddedValueBounded, VNs) of
                         {ok, VN} -> NewVNs = VNs;
                         error -> 
-                            VN = vn:create_VN(categorical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, ExperimentStep, GlobalCfg),
+                            VN = vn:create_VN(categorical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, MinValue, MaxValue, ExperimentStep, GlobalCfg),
                             NewVNs = VNs#{AddedValueBounded => VN}
                     end;
                 
                 numerical -> 
-                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValueBounded, fun() -> vn:create_VN(numerical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, NewMinValue, NewMaxValue, ExperimentStep, GlobalCfg) end),
+                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValueBounded, fun() -> vn:create_VN(numerical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, MinValue, MaxValue, ExperimentStep, GlobalCfg) end),
                         
                     case IsNew of
                         new_value ->
