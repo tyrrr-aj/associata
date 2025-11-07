@@ -144,6 +144,8 @@ add_observation_impl(ExperimentStep, Values, #state{vngs = VNGs, ong = ONG, obs_
     {NewON, NewONIndex} = ong:new_ON(ExperimentStep, ONG),
     maps:foreach(fun(Name, Value) -> vng:add_value(ExperimentStep, maps:get(Name, VNGs), Value, NewON, NewONIndex) end, Values),
     maps:foreach(fun(Name, _Value) -> vng:wait_for_value_added(maps:get(Name, VNGs)) end, Values),
+
+    pyrlang:send_client(State#state.structure_id, {new_on_index, NewONIndex}),
     State#state{obs_count = ObsCount + 1}.
 
 
