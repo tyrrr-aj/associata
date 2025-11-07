@@ -142,49 +142,15 @@ process_events(#state{
 
                     report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
 
-                    NewStimulatedNeighs = case CurrONGMode of
-                        transitive -> 
-                            StimulatedVNs = if
-                                EffectiveStimulus >= MinPassedStimulus -> [
-                                        VN || {VN, {_ReprValue, VNGName}} <- maps:to_list(ConnectedVNs), 
-                                                                            ng:is_accumulative(VNGName, NodeGroupModes)
-                                    ];
-                                true -> []
-                            end,
+                    {NewStimulatedNeighs, StimulatingNeighsFinished} = if
+                        CurrONGMode =:= transitive -> 
+                            stimulate_vns(ConnectedVNs, StimulatedNeighs, EffectiveStimulus, NewDepth, Source, StimulationSpec);
 
-                            lists:foreach(fun(VN) -> vn:stimulate(VN, EffectiveStimulus, NewDepth, StimulationSpec) end, StimulatedVNs),
-        
-                            case StimulatedVNs of
-                                [] -> 
-                                    StimulatingNeighsFinished = true,
-                                    StimulatedNeighs;
-                                _ -> 
-                                    StimulatingNeighsFinished = false,
-                                    case StimulatedNeighs of
-                                        #{NewDepth := {StimulatedNeighsAtDepth, SourcesAtDepth}} -> 
-                                            NewStimulatedNeighsAtDepth = lists:foldl(
-                                                fun(VN, Acc) ->
-                                                    case Acc of
-                                                        #{VN := NeighStimulationCount} -> Acc#{VN => NeighStimulationCount + 1};
-                                                        _ -> Acc#{VN => 1}
-                                                    end
-                                                end,
-                                                StimulatedNeighsAtDepth,
-                                                StimulatedVNs
-                                            ),
-                                            NewSourcesAtDepth = case SourcesAtDepth of
-                                                #{Source := SourceStimulationCount} -> SourcesAtDepth#{Source => SourceStimulationCount + 1};
-                                                _ -> SourcesAtDepth#{Source => 1}
-                                            end,
-                                            StimulatedNeighs#{NewDepth => {NewStimulatedNeighsAtDepth, NewSourcesAtDepth}};
-                                        
-                                        _ -> StimulatedNeighs#{NewDepth => {lists:foldl(fun(VN, Acc) -> Acc#{VN => 1} end, #{}, StimulatedVNs), #{Source => 1}}}
-                                    end
-                            end;
-                        
-                        accumulative -> 
-                            StimulatingNeighsFinished = true,
-                            #{}
+                        CurrONGMode =:= accumulative andalso StimulationKind =:= poisoning andalso Source =:= ONG -> 
+                            stimulate_vns(ConnectedVNs, StimulatedNeighs, EffectiveStimulus, NewDepth, Source, StimulationSpec);
+
+                        true ->
+                            {#{}, true}
                     end,
 
                     case StimulationKind of
@@ -292,6 +258,65 @@ process_events(#state{
 
 
 weight_poisoning(PoisonLvl) -> PoisonLvl.
+
+
+stimulate_vns(
+    ConnectedVNs, 
+    StimulatedNeighs, 
+    EffectiveStimulus,
+    NewDepth,
+    StimulationSource, 
+    #stim_spec{
+        id=StimulationId, 
+        experiment_step=ExperimentStep,
+        name=StimulationName,
+        write_to_log=WriteToLog,
+        node_group_modes=NodeGroupModes, 
+        min_passed_stimulus=MinPassedStimulus, 
+        kind=StimulationKind,
+        params=StimulationParams
+    }=StimulationSpec
+) ->
+    StimulatedVNs = if
+        EffectiveStimulus >= MinPassedStimulus -> [
+                VN || {VN, {_ReprValue, VNGName}} <- maps:to_list(ConnectedVNs), 
+                                                    ng:is_accumulative(VNGName, NodeGroupModes) orelse (ng:is_transitive(VNGName, NodeGroupModes) andalso StimulationKind =:= poisoning)
+            ];
+        true -> []
+    end,
+
+    lists:foreach(fun(VN) -> vn:stimulate(VN, EffectiveStimulus, NewDepth, StimulationSpec) end, StimulatedVNs),
+
+    NewStimulatedNeighs = case StimulatedVNs of
+        [] -> 
+            StimulatingNeighsFinished = true,
+            StimulatedNeighs;
+        _ -> 
+            StimulatingNeighsFinished = false,
+            case StimulatedNeighs of
+                #{NewDepth := {StimulatedNeighsAtDepth, SourcesAtDepth}} -> 
+                    NewStimulatedNeighsAtDepth = lists:foldl(
+                        fun(VN, Acc) ->
+                            case Acc of
+                                #{VN := NeighStimulationCount} -> Acc#{VN => NeighStimulationCount + 1};
+                                _ -> Acc#{VN => 1}
+                            end
+                        end,
+                        StimulatedNeighsAtDepth,
+                        StimulatedVNs
+                    ),
+                    NewSourcesAtDepth = case SourcesAtDepth of
+                        #{StimulationSource := SourceStimulationCount} -> SourcesAtDepth#{StimulationSource => SourceStimulationCount + 1};
+                        _ -> SourcesAtDepth#{StimulationSource => 1}
+                    end,
+                    StimulatedNeighs#{NewDepth => {NewStimulatedNeighsAtDepth, NewSourcesAtDepth}};
+
+                _ -> StimulatedNeighs#{NewDepth => {lists:foldl(fun(VN, Acc) -> Acc#{VN => 1} end, #{}, StimulatedVNs), #{StimulationSource => 1}}}
+            end
+    end,
+
+    {NewStimulatedNeighs, StimulatingNeighsFinished}.
+
 
 
 amplify_stimulus_with_responsive_vns(Stimulus, Depth, ConnectedVNs, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec) ->
