@@ -191,8 +191,9 @@ class AGDS(AAS):
     async def add_observation(self, vng_values, experiment_step):
         add_observation_cmd = (Atom('add_observation'), experiment_step, vng_values)
         # print(f'Adding observation: {add_observation_cmd}')
-        await self._channel.send_backend_async(add_observation_cmd)
-    
+        new_on_index = await self._query_backend(add_observation_cmd, self._parse_add_observation_response)
+        return new_on_index
+
     async def infere(self, inference_setup, min_passed_stimulus, experiment_step, stimulation_name):
         self._stimulated = True
         # print(f'{timestamp_str()}    sending inference: {inference_setup.get_entries()}')
@@ -289,6 +290,13 @@ class AGDS(AAS):
         match message:
             case (Atom('neighbours'), neighbours):
                 return neighbours
+            case _:
+                return None
+            
+    def _parse_add_observation_response(self, message):
+        match message:
+            case (Atom('new_on_index'), on_index):
+                return on_index
             case _:
                 return None
             

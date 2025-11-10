@@ -339,8 +339,6 @@ class TD_AGDS(TD):
     async def _update_q(self, next_state, next_action, reward):
         last_sa_value = await self._search_for_action_value(self._last_state, self._last_action, 'last_sa_value_search')
         updated_last_sa_value = await self._updated_q_value(last_sa_value, next_state, next_action, reward)
-        
-        await self._poison(self._last_state, self._last_action)
 
         # TODO: handles only one-dimensional action space
         # TODO: handles only float values for VNGs
@@ -348,12 +346,13 @@ class TD_AGDS(TD):
                                     list(self._state_space_feature_names) + ['value', 'action'], 
                                     self._last_state.tolist() + [updated_last_sa_value, self._last_action[0]]
                                 )}
-        await self.q.add_observation(new_observation, self._step_nr)
+        
+        new_on_index = await self.q.add_observation(new_observation, self._step_nr)
+        await self._poison(new_on_index, self._last_action)
 
 
     async def _set_known_q_value(self, state, action, value):
         # print(f'{self._timestamp()} Setting known Q value in step {self._step_nr} for state {state} and action {action} to {value}')
-        await self._poison(state, action, 'poison_known_q_value')
 
         # TODO: handles only one-dimensional action space
         # TODO: handles only float values for VNGs
@@ -361,7 +360,9 @@ class TD_AGDS(TD):
                                 list(self._state_space_feature_names) + ['value', 'action'], 
                                 state.tolist() + [value, action[0]]
                             )}
-        await self.q.add_observation(observation, self._step_nr)
+        
+        new_on_index = await self.q.add_observation(observation, self._step_nr)
+        await self._poison(new_on_index, action, 'poison_known_q_value')
 
 
     async def _search_for_action_value(self, state, action, stimulation_name):
@@ -399,17 +400,18 @@ class TD_AGDS(TD):
         )
     
 
-    async def _poison(self, state, action, name='poison'):
-        last_sa_search = self._setup_search_from_state(
-            state,
+    async def _poison(self, new_on, action, name='poison'):
+        poison_search = self._setup_search_from_on(
+            new_on,
             ong_mode=associata.NodeGroupMode.accumulative, 
             action_mode=associata.NodeGroupMode.responsive_exciation, 
-            value_mode=associata.NodeGroupMode.passive
+            value_mode=associata.NodeGroupMode.passive, 
+            state_mode=associata.NodeGroupMode.transitive
         )
-        last_sa_search = self._add_search_from_action(action, last_sa_search)
+        poison_search = self._add_search_from_action(action, poison_search)
 
         await self.q.poison(
-            last_sa_search,
+            poison_search,
             self.poison_min_passed_stimulus,
             self.poison_deadly_dose,
             self.poison_min_acc_dose,
@@ -431,6 +433,22 @@ class TD_AGDS(TD):
         
         for f_name, f_value in zip(self._state_space_feature_names, state):
             search.stimulate_vn(str(f_name), f_value)
+
+        return search
+    
+
+    def _setup_search_from_on(self, on_node, ong_mode, action_mode, value_mode, state_mode):
+        node_group_modes = {
+            'ong': ong_mode,
+            'value': value_mode,
+            'action': action_mode,
+        } | {
+            str(feature_name): state_mode for feature_name in self._state_space_feature_names
+        }
+
+        search = associata.StimulationSetup(node_group_modes)
+        
+        search.stimulate_on(on_node)
 
         return search
     
