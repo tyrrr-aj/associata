@@ -101,7 +101,7 @@ process_events(#state{
     last_stimulation_id=CurrStimulationId, 
     stimulated_neighs=StimulatedNeighs, 
     acc_poison_lvl=AccPoisonLvl,
-    global_cfg=#global_cfg{reporter=Reporter}=GlobalCfg
+    global_cfg=#global_cfg{reporter=Reporter}=_GlobalCfg
 } = State) -> 
 
     receive
@@ -116,7 +116,7 @@ process_events(#state{
                 name=StimulationName,
                 write_to_log=WriteToLog,
                 node_group_modes=NodeGroupModes, 
-                min_passed_stimulus=MinPassedStimulus, 
+                min_passed_stimulus=_MinPassedStimulus, 
                 kind=StimulationKind,
                 params=StimulationParams
             }=StimulationSpec
@@ -133,14 +133,10 @@ process_events(#state{
                     process_events(State);
 
                 CurrONGMode ->
-                    PoisonedStimulus = case StimulationKind of
-                        poisoning -> Stimulus;
-                        _ -> weight_poisoning(Stimulus)
-                    end,
-                    EffectiveStimulus = amplify_stimulus_with_responsive_vns(PoisonedStimulus, NewDepth, ConnectedVNs, StimulationSpec),
+                    EffectiveStimulus = get_effective_stimulus(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
 
-                    report:node_stimulated(WriteToLog, self(), Source, NewExcitation, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
+                    report:node_stimulated(WriteToLog, self(), Source, NewExcitation, EffectiveStimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
 
                     {NewStimulatedNeighs, StimulatingNeighsFinished} = if
                         CurrONGMode =:= transitive -> 
@@ -162,20 +158,7 @@ process_events(#state{
                             process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId, stimulated_neighs=NewStimulatedNeighs});
 
                         poisoning -> 
-                            MinAccumulatedDose = maps:get(min_accumulated_dose, StimulationParams),
-
-                            NewAccPoisonLvl = if
-                                LastExcitation >= MinAccumulatedDose -> 
-                                    report:node_poisoned(self(), AccPoisonLvl + EffectiveStimulus, ExperimentStep, Reporter),
-                                    AccPoisonLvl + EffectiveStimulus;
-                                
-                                NewExcitation >= MinAccumulatedDose -> 
-                                    report:node_poisoned(self(), AccPoisonLvl + NewExcitation, ExperimentStep, Reporter),
-                                    AccPoisonLvl + NewExcitation;
-                                
-                                true -> AccPoisonLvl
-                            end,
-
+                            NewAccPoisonLvl = accumulate_poison(ONG, AccPoisonLvl, LastExcitation, NewExcitation, EffectiveStimulus, Source, ExperimentStep, Reporter, StimulationParams),
                             DeadlyDose = maps:get(deadly_dose, StimulationParams),
 
                             if 
@@ -260,6 +243,33 @@ process_events(#state{
 weight_poisoning(PoisonLvl) -> PoisonLvl.
 
 
+get_effective_stimulus(Stimulus, NewDepth, ConnectedVNs, #stim_spec{kind=StimulationKind}=StimulationSpec) ->
+     AmplifiedStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
+    EffectiveStimulus = case StimulationKind of
+        poisoning -> AmplifiedStimulus;
+        _ -> weight_poisoning(AmplifiedStimulus)
+    end,
+    EffectiveStimulus.
+
+
+accumulate_poison(ONG, CurrAccPoisonLvl, LastExcitation, NewExcitation, EffectiveStimulus, Source, ExperimentStep, Reporter, StimulationParams) ->
+    MinAccumulatedDose = maps:get(min_accumulated_dose, StimulationParams),
+    NewAccPoisonLvl = if
+        Source =:= ONG -> CurrAccPoisonLvl;
+
+        LastExcitation >= MinAccumulatedDose -> 
+            report:node_poisoned(self(), CurrAccPoisonLvl + EffectiveStimulus, ExperimentStep, Reporter),
+            CurrAccPoisonLvl + EffectiveStimulus;
+        
+        NewExcitation >= MinAccumulatedDose -> 
+            report:node_poisoned(self(), CurrAccPoisonLvl + NewExcitation, ExperimentStep, Reporter),
+            CurrAccPoisonLvl + NewExcitation;
+        
+        true -> CurrAccPoisonLvl
+    end,
+    NewAccPoisonLvl.
+
+
 stimulate_vns(
     ConnectedVNs, 
     StimulatedNeighs, 
@@ -267,14 +277,9 @@ stimulate_vns(
     NewDepth,
     StimulationSource, 
     #stim_spec{
-        id=StimulationId, 
-        experiment_step=ExperimentStep,
-        name=StimulationName,
-        write_to_log=WriteToLog,
         node_group_modes=NodeGroupModes, 
         min_passed_stimulus=MinPassedStimulus, 
-        kind=StimulationKind,
-        params=StimulationParams
+        kind=StimulationKind
     }=StimulationSpec
 ) ->
     StimulatedVNs = if
