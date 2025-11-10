@@ -77,14 +77,14 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
 
 
         {stimulate, Stimuli, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec} ->
-            case maps:get(ong, NodeGroupModes) of
+            case maps:get("ong", NodeGroupModes) of
                 passive -> 
                     stimulation:send_stimulation_finished(AGDS, 0),
                     process_events(State);
 
                 _ -> 
                     maps:foreach(fun(ONIndex, Stimulus) -> on:stimulate(maps:get(ONIndex, ONs), Stimulus, 0, StimulationSpec) end, Stimuli),
-                    NewStimulatedONs = maps:keys(Stimuli),
+                    NewStimulatedONs = [maps:get(ONIndex, ONs) || ONIndex <- maps:keys(Stimuli)],
 
                     case NewStimulatedONs of
                         [] -> stimulation:send_stimulation_finished(AGDS, 0);
