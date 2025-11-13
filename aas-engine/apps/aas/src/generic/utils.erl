@@ -1,6 +1,6 @@
 -module(utils).
 
--export([get_timestamp_str/0]).
+-export([get_timestamp_str/0, partition_map/2]).
 
 
 get_timestamp_str() ->
@@ -14,3 +14,12 @@ get_timestamp_str() ->
         "~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B:~9..0B",
         [Year, Month, Day, Hour, Minute, Second, Nanos]
     )).
+
+
+partition_map(Fun, Map) ->
+    maps:fold(fun(Key, Value, {MapTrue, MapFalse}) ->
+        case Fun(Key, Value) of
+            true -> {maps:put(Key, Value, MapTrue), MapFalse};
+            false -> {MapTrue, maps:put(Key, Value, MapFalse)}
+        end
+    end, {#{}, #{}}, Map).

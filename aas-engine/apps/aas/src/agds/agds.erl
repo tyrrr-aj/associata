@@ -245,7 +245,7 @@ stop_impl(#state{structure_id = StructureId} = State) ->
 %% %%%%%%%%%%%%%%% Helper functions %%%%%%%%%%%%%%%
  
 
-stimulate(InitialStimuli, StimulationSpec, VNGs, ONG) ->
+stimulate(InitialStimuli, #stim_spec{node_group_modes=NodeGroupModes} = StimulationSpec, VNGs, ONG) ->
     StimuliByNodeGroup = maps:fold(fun(Target, Stimulus, Acc) -> 
         case Target of
             {vn, VNGName, Value} -> 
@@ -263,22 +263,15 @@ stimulate(InitialStimuli, StimulationSpec, VNGs, ONG) ->
         end
     end, #{}, InitialStimuli),
 
-    
-    maps:foreach(fun(NodeGroup, Stimulations) -> 
+    {ResponsiveNGStim, NonResponsiveNGStim} = utils:partition_map(fun(NodeGroup, _Stimuli) -> 
         case NodeGroup of
-            {vng, VNGName} -> vng:stimulate(maps:get(VNGName, VNGs), Stimulations, StimulationSpec);
-            ong -> ong:stimulate(ONG, Stimulations, StimulationSpec)
+            {vng, VNGName} -> ng:is_responsive(VNGName, NodeGroupModes);
+            ong -> ng:is_responsive("ong", NodeGroupModes)
         end
     end, StimuliByNodeGroup),
-
-    StimulatedNodeGroups = maps:fold(fun(NodeGroup, _Stimuli, Acc) -> 
-        case NodeGroup of
-            {vng, VNGName} -> sets:add_element(maps:get(VNGName, VNGs), Acc);
-            ong -> sets:add_element(ONG, Acc)
-        end
-    end, sets:new(), StimuliByNodeGroup),
-
-    wait_for_stimulation_to_finish(StimulatedNodeGroups, StimulationSpec, VNGs, ONG).
+    
+    stimulate_node_groups(ResponsiveNGStim, VNGs, ONG, StimulationSpec),
+    stimulate_node_groups(NonResponsiveNGStim, VNGs, ONG, StimulationSpec).
 
 
 delete_impl(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{reporter = Reporter}}) ->
@@ -310,6 +303,24 @@ initial_stimulation_type(InitialStimuli) ->
         true -> best_action_search;
         false -> action_value_search
     end.
+
+
+stimulate_node_groups(StimuliByNodeGroup, VNGs, ONG, StimulationSpec) ->
+    maps:foreach(fun(NodeGroup, Stimulations) -> 
+        case NodeGroup of
+            {vng, VNGName} -> vng:stimulate(maps:get(VNGName, VNGs), Stimulations, StimulationSpec);
+            ong -> ong:stimulate(ONG, Stimulations, StimulationSpec)
+        end
+    end, StimuliByNodeGroup),
+
+    StimulatedNodeGroups = maps:fold(fun(NodeGroup, _Stimuli, Acc) -> 
+        case NodeGroup of
+            {vng, VNGName} -> sets:add_element(maps:get(VNGName, VNGs), Acc);
+            ong -> sets:add_element(ONG, Acc)
+        end
+    end, sets:new(), StimuliByNodeGroup),
+
+    wait_for_stimulation_to_finish(StimulatedNodeGroups, StimulationSpec, VNGs, ONG).
 
 
 % reset_after_deadlock(VNGs, ONG) ->
