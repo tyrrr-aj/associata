@@ -21,7 +21,7 @@
     last_excitation,        % float
     last_stimulation_id,    % int
     stimulated_neighs,      % #{int => {#{pid := int}, #{pid := int}}}
-    acc_poison_lvl,         % float
+    acc_poison_lvls,        % #{string() := float()}  % per VNG accumulated poison level
     global_cfg             % #global_cfg
 }).
 
@@ -88,7 +88,7 @@ init(ONG, ONIndex, ExperimentStep, #global_cfg{reporter=Reporter} = GlobalCfg) -
         last_excitation=0.0, 
         last_stimulation_id=none, 
         stimulated_neighs=#{},
-        acc_poison_lvl=0.0,
+        acc_poison_lvls=#{},
         global_cfg=GlobalCfg
 }).
 
@@ -100,7 +100,7 @@ process_events(#state{
     last_excitation=LastExcitation, 
     last_stimulation_id=CurrStimulationId, 
     stimulated_neighs=StimulatedNeighs, 
-    acc_poison_lvl=AccPoisonLvl,
+    acc_poison_lvls=AccPoisonLvls,
     global_cfg=#global_cfg{reporter=Reporter}=_GlobalCfg
 } = State) -> 
 
@@ -133,7 +133,7 @@ process_events(#state{
                     process_events(State);
 
                 CurrONGMode ->
-                    EffectiveStimulus = get_effective_stimulus(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
+                    EffectiveStimulus = get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
 
                     report:node_stimulated(WriteToLog, self(), Source, NewExcitation, EffectiveStimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
@@ -158,11 +158,23 @@ process_events(#state{
                             process_events(State#state{last_excitation=NewExcitation, last_stimulation_id=StimulationId, stimulated_neighs=NewStimulatedNeighs});
 
                         poisoning -> 
-                            NewAccPoisonLvl = accumulate_poison(ONG, AccPoisonLvl, LastExcitation, NewExcitation, EffectiveStimulus, Source, ExperimentStep, Reporter, StimulationParams),
+                            NewAccPoisonLvls = accumulate_poison(
+                                ONG,
+                                AccPoisonLvls,
+                                LastExcitation,
+                                NewExcitation,
+                                EffectiveStimulus,
+                                Source,
+                                ConnectedVNs,
+                                ExperimentStep,
+                                Reporter,
+                                StimulationParams
+                            ),
                             DeadlyDose = maps:get(deadly_dose, StimulationParams),
+                            AllVNGsDeadly = deadly_poison_reached_for_all_vngs(NewAccPoisonLvls, ConnectedVNs, DeadlyDose),
 
                             if 
-                                NewAccPoisonLvl >= DeadlyDose -> 
+                                AllVNGsDeadly -> 
                                     report:node_killed(self(), ExperimentStep, Reporter),
                                     [vn:disconnect_ON(VN, self(), ExperimentStep) || VN <- maps:keys(ConnectedVNs)],
                                     ong:remove_killed_ON(ONG, ONIndex),
@@ -179,7 +191,7 @@ process_events(#state{
                                     process_events(State#state{
                                         last_stimulation_id=StimulationId,
                                         last_excitation=NewExcitation,
-                                        acc_poison_lvl=NewAccPoisonLvl, 
+                                        acc_poison_lvls=NewAccPoisonLvls, 
                                         stimulated_neighs=NewStimulatedNeighs
                                     })
                             end
@@ -243,31 +255,47 @@ process_events(#state{
 weight_poisoning(PoisonLvl) -> PoisonLvl.
 
 
-get_effective_stimulus(Stimulus, NewDepth, ConnectedVNs, #stim_spec{kind=StimulationKind}=StimulationSpec) ->
-     AmplifiedStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
-    EffectiveStimulus = case StimulationKind of
+get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, #stim_spec{kind=StimulationKind}=StimulationSpec) ->
+    AmplifiedStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
+    PoisonLvl = case maps:get(Source, ConnectedVNs, undefined) of
+        {_ReprValue, VNGName} -> maps:get(VNGName, AccPoisonLvls, 0.0);
+        undefined -> 0.0
+    end,
+    WeightedStimulus = case StimulationKind of
         poisoning -> AmplifiedStimulus;
-        _ -> weight_poisoning(AmplifiedStimulus)
+        _ -> AmplifiedStimulus - weight_poisoning(PoisonLvl)
     end,
-    EffectiveStimulus.
+    if
+        WeightedStimulus < 0.0 -> 0.0;
+        true -> WeightedStimulus
+    end.
 
 
-accumulate_poison(ONG, CurrAccPoisonLvl, LastExcitation, NewExcitation, EffectiveStimulus, Source, ExperimentStep, Reporter, StimulationParams) ->
+accumulate_poison(ONG, CurrAccPoisonLvls, LastExcitation, NewExcitation, EffectiveStimulus, Source, ConnectedVNs, ExperimentStep, Reporter, StimulationParams) ->
     MinAccumulatedDose = maps:get(min_accumulated_dose, StimulationParams),
-    NewAccPoisonLvl = if
-        Source =:= ONG -> CurrAccPoisonLvl;
 
-        LastExcitation >= MinAccumulatedDose -> 
-            report:node_poisoned(self(), CurrAccPoisonLvl + EffectiveStimulus, ExperimentStep, Reporter),
-            CurrAccPoisonLvl + EffectiveStimulus;
-        
-        NewExcitation >= MinAccumulatedDose -> 
-            report:node_poisoned(self(), CurrAccPoisonLvl + NewExcitation, ExperimentStep, Reporter),
-            CurrAccPoisonLvl + NewExcitation;
-        
-        true -> CurrAccPoisonLvl
-    end,
-    NewAccPoisonLvl.
+    %% Only accumulate if source is a VN (not ONG) and belongs to a VNG
+    case maps:is_key(Source, ConnectedVNs) of
+        false -> CurrAccPoisonLvls;  % Source not a VN or not connected
+        true ->
+            {_ReprValue, VNGName} = maps:get(Source, ConnectedVNs),
+            CurrForVNG = maps:get(VNGName, CurrAccPoisonLvls, 0.0),
+            NewForVNG = if
+                Source =:= ONG -> CurrForVNG;  % safeguard, though maps:is_key(Source, ConnectedVNs) false for ONG
+                LastExcitation >= MinAccumulatedDose -> 
+                    report:node_poisoned(self(), CurrForVNG + EffectiveStimulus, ExperimentStep, Reporter),
+                    CurrForVNG + EffectiveStimulus;
+                NewExcitation >= MinAccumulatedDose -> 
+                    report:node_poisoned(self(), CurrForVNG + NewExcitation, ExperimentStep, Reporter),
+                    CurrForVNG + NewExcitation;
+                true -> CurrForVNG
+            end,
+            CurrAccPoisonLvls#{VNGName => NewForVNG}
+    end.
+
+deadly_poison_reached_for_all_vngs(AccPoisonLvls, ConnectedVNs, DeadlyDose) ->
+    VNGNames = lists:usort([VNGName || {_VN,{_ReprValue,VNGName}} <- maps:to_list(ConnectedVNs), VNGName =/= "action" andalso VNGName =/= "value" ]),
+    lists:all(fun(VNGName) -> maps:get(VNGName, AccPoisonLvls, 0.0) >= DeadlyDose end, VNGNames).
 
 
 stimulate_vns(

@@ -18,6 +18,10 @@ Czy da się zrobić poisoning na klasycznych wagach połączeń? A może te wagi
 
 
  
+ Stan prac:
+ nowy poisoning zaimplementowany, umiera w drugim/trzecim kroku - coś musi być poknocone ze śledzeniem końca inferencji, sprawdzić
+
+
 
 Sposób uruchomienia całości:
 - albo wywołanie Erlanga z pythona (najpewniej przez command line)

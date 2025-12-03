@@ -241,7 +241,7 @@ class TD_AGDS(TD):
         state_space_bounds,
         state_space_epsilon,
         action_space,
-        alpha=0.5,
+        alpha=0.25,
         gamma=1.0,
         greedy_epsilon=0.1,
         save_stimulations_in_step=None,
@@ -267,7 +267,7 @@ class TD_AGDS(TD):
         self.min_passed_stimulus_ong = min_passed_stimulus_ong
         self.min_on_excitation = min_on_excitation
         self.poison_min_passed_stimulus = poison_min_passed_stimulus
-        self.poison_deadly_dose = poison_deadly_dose if poison_deadly_dose is not None else float(len(state_space_feature_names))
+        self.poison_deadly_dose = poison_deadly_dose if poison_deadly_dose is not None else 1.0
         self.poison_min_acc_dose = poison_min_acc_dose
         self.value_epsilon = value_epsilon
         self.min_value = min_value
@@ -496,7 +496,15 @@ class TD_AGDS(TD):
 class SarsaAGDS(TD_AGDS):
     async def _updated_q_value(self, last_sa_value, next_state, next_action, reward):
         next_sa_value = await self._search_for_action_value(next_state, next_action, 'next_sa_value_search')        
-        return last_sa_value + self.alpha * (reward + self.gamma * next_sa_value - last_sa_value)
+        new_q_value = last_sa_value + self.alpha * (reward + self.gamma * next_sa_value - last_sa_value)
+
+        print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
+        print(f"Last state={self._last_state}, last action={self._last_action}, last Q-value={last_sa_value}, reward={reward}")
+        print(f"Next state={next_state}, next action={next_action}, next Q-value={next_sa_value}")
+        print(f"Computation: new Q-value = {last_sa_value} + {self.alpha} * ({reward} + {self.gamma} * {next_sa_value} - {last_sa_value}) = {new_q_value}")
+        print("\n")
+
+        return new_q_value
 
 
 class QLearningAGDS(TD_AGDS):
