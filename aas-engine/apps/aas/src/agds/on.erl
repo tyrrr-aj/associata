@@ -3,6 +3,7 @@
     create_ON/4, 
     connect_VN/4, 
     disconnect_VN/2, 
+    remove_outdated_connections/3,
     confirm_death_notification/2,
     stimulate/4, 
     get_excitation/2, 
@@ -39,6 +40,13 @@ connect_VN(ON, VN, ReprValue, VNGName) ->
 
 
 disconnect_VN(ON, VN) -> ON ! {disconnect, VN}.
+
+
+remove_outdated_connections(ON, AffectedVNGsAndCurrVNs, ExperimentStep) -> 
+    ON ! {remove_outdated_connections, AffectedVNGsAndCurrVNs, ExperimentStep, self()},
+    receive
+        removal_finished -> ok
+    end.
 
 
 confirm_death_notification(ON, VN) -> ON ! {on_death_confirmed_by_vn, VN}.
@@ -218,12 +226,37 @@ process_events(#state{
 
 
         {connect, Asker, VN, ReprValue, VNGName} ->
+            % Disconnect any prevoiously connected VN from the same VNG
+            % ExistingVNsForVNG = [ExistingVN || {ExistingVN, {_ExistingReprValue, ExistingVNGName}} <- maps:to_list(ConnectedVNs), ExistingVNGName =:= VNGName],
+            % lists:foreach(fun(ExistingVN) ->
+            %     vn:disconnect_ON(ExistingVN, self(), 0) %% TODO: Handle ExperimentStep properly
+            % end, ExistingVNsForVNG),
+
             Asker ! {vn_connected, VN, self()},
             process_events(State#state{connected_vns=ConnectedVNs#{VN => {ReprValue, VNGName}}});
 
 
         {disconnect, VN} ->
             process_events(State#state{connected_vns=maps:remove(VN, ConnectedVNs)});
+
+
+        {remove_outdated_connections, AffectedVNGsAndCurrVNs, ExperimentStep, Sender} -> 
+            NewConnectedVNs = maps:filter(
+                fun(VN, {_ReprValue, VNGName}) -> 
+                    case maps:get(VNGName, AffectedVNGsAndCurrVNs, none) of
+                        none -> true;
+                        VN -> true;
+                        _ -> false
+                    end
+                end,
+                ConnectedVNs),
+
+            RemovedVNs = maps:keys(ConnectedVNs) -- maps:keys(NewConnectedVNs),
+            % io:format("ON ~p: Removing VNs ~p replaced by ~p~n", [ONIndex, lists:map(fun(VN) -> maps:get(VN, ConnectedVNs) end, RemovedVNs), AffectedVNGsAndCurrVNs]),
+            lists:foreach(fun(VN) -> vn:disconnect_ON(VN, self(), ExperimentStep) end, RemovedVNs),
+            
+            Sender ! removal_finished,
+            process_events(State#state{connected_vns=NewConnectedVNs});
 
 
         {get_excitation, Asker, LastStimulationId} -> 

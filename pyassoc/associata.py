@@ -171,6 +171,8 @@ class AGDS(AAS):
 
         self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: exp_step % 100 == 0
 
+        self._n_ons = 0
+
     async def add_numerical_vng(self, name, epsilon, min_value, max_value):
         await self._channel.send_backend_async((
             Atom('add_vng'), 
@@ -189,10 +191,30 @@ class AGDS(AAS):
         ))
 
     async def add_observation(self, vng_values, experiment_step):
+        # print(f'Adding observation {self._n_ons} with value={vng_values["value"]}\n')
+        self._n_ons += 1
+
         add_observation_cmd = (Atom('add_observation'), experiment_step, vng_values)
         # print(f'Adding observation: {add_observation_cmd}')
         new_on_index = await self._query_backend(add_observation_cmd, self._parse_add_observation_response)
         return new_on_index
+    
+    async def get_on_for_exact_vn_values(self, vng_values):
+        get_on_cmd = (Atom('get_on_for_exact_vn_values'), vng_values)
+        on = await self._query_backend(get_on_cmd, self._parse_get_on_for_exact_vn_values)
+        return on
+    
+    async def reconnect_on(self, on_index, reconnected_vng_values, new_vng_values, experiment_step):
+        # print(f'Reconnecting on {on_index} to new_vng_values={new_vng_values}\n')
+
+        await self._channel.send_backend_async((
+            Atom('reconnect_on'), 
+            experiment_step, 
+            on_index, 
+            reconnected_vng_values,
+            new_vng_values
+        ))
+        await self._channel.receive_async(self._query_timeout_sec)    # 'on_reconnected'
 
     async def infere(self, inference_setup, min_passed_stimulus, experiment_step, stimulation_name):
         self._stimulated = True
@@ -296,6 +318,15 @@ class AGDS(AAS):
     def _parse_add_observation_response(self, message):
         match message:
             case (Atom('new_on_index'), on_index):
+                return on_index
+            case _:
+                return None
+            
+    def _parse_get_on_for_exact_vn_values(self, message):
+        match message:
+            case (Atom('on_for_exact_vn_values'), Atom('none')):
+                return None
+            case (Atom('on_for_exact_vn_values'), on_index):
                 return on_index
             case _:
                 return None

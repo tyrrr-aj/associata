@@ -29,6 +29,7 @@ class TD(ABC):
         self._last_action = None
         self._acc_reward = 0.0
         self.episode_rewards = []
+        self.episode_step_nr = []
 
         self._step_nr = 0
 
@@ -78,6 +79,7 @@ class TD(ABC):
 
         if save_score:
             self.episode_rewards.append(self._acc_reward)
+            self.episode_step_nr.append(self._step_nr)
         
         self._acc_reward = 0.0
 
@@ -145,11 +147,15 @@ class Sarsa(TD):
     def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1, greedy_epsilon=0.1, state_space_feature_names=None):
         self._dont_know_history = []
         self._exploratory_action_history = []
+        # self._state_history = {}
         super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha, gamma, greedy_epsilon, state_space_feature_names)
 
     async def _get_state(self, observation):
         indices = np.floor((observation - self._state_space_bounds[0, :]) / self._state_space_epsilon)
-        return np.clip(indices, np.zeros(len(self._state_space_shape)), self._state_space_shape - 1).astype('int')
+        state = np.clip(indices, np.zeros(len(self._state_space_shape)), self._state_space_shape - 1).astype('int')
+        # if tuple(state) not in self._state_history:
+        #     self._state_history[tuple(state)] = len(self._state_history)
+        return state
 
 
     async def _get_action(self, state, epsilon=None):
@@ -184,10 +190,21 @@ class Sarsa(TD):
 
 
     async def _update_q(self, next_state, next_action, reward):
+        # last_state_id = self._state_history[tuple(self._last_state)]
+        # next_state_id = self._state_history[tuple(next_state)]
+        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
+        # print(f"Last state={last_state_id}, last action={self._last_action}, last Q-value={self.q[*self._last_state, *self._last_action]}, reward={reward}")
+        # print(f"Next state={next_state_id}, next action={next_action}, next Q-value={self.q[*next_state, *next_action]}")
+        # print(f"Computation: new Q-value = {self.q[*self._last_state, *self._last_action]} + {self.alpha} * ({reward} + {self.gamma} * {self.q[*next_state, *next_action]} - {self.q[*self._last_state, *self._last_action]}) = {self.q[*self._last_state, *self._last_action] + self.alpha * (reward + self.gamma * self.q[*next_state, *next_action] - self.q[*self._last_state, *self._last_action])}")
+        # print("\n")
         self.q[*self._last_state, *self._last_action] += self.alpha * (reward + self.gamma * self.q[*next_state, *next_action] - self.q[*self._last_state, *self._last_action])
 
 
     async def _set_known_q_value(self, state, action, reward):
+        # state_id = self._state_history[tuple(state)]
+        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
+        # print(f"Setting known Q-value for state={state_id}, action={action} to value={reward}")
+        # print("\n")
         self.q[*state, *action] = reward
 
 
@@ -309,22 +326,46 @@ class TD_AGDS(TD):
             return self._get_random_action()
 
         else:
+            # exploiting action
             self._exploratory_action_history.append(0)
 
-            # exploiting action
-            best_sa = await self._search_for_best_action(state, 'pick_action')
+            ons = await self.q.get_on_for_exact_vn_values(
+                {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())}
+            )
 
-            if best_sa is None:
-                return self._get_random_action()
+            match ons:
+                case None:
+                    return self._get_random_action()
+                case (on1, on2):
+                    on1_neighs = await self.q.get_on_neighbours(on1)
+                    on2_neighs = await self.q.get_on_neighbours(on2)
 
-            # TODO: handles only one-dimensional action space
-            best_sa_neigh_nodes = await self.q.get_on_neighbours(int(best_sa))
-            # print(f'Best sa neigh nodes: {best_sa_neigh_nodes}')
+                    on1_value = np.array([float(ef[2]) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'value'])
+                    on2_value = np.array([float(ef[2]) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'value'])
 
-            if best_sa_neigh_nodes == []:
-                return self._get_random_action()
+                    if on1_value > on2_value:
+                        return np.array([int(float(ef[2])) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'action'])
+                    else:
+                        return np.array([int(float(ef[2])) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'action'])
+                    
+                case on:
+                    neighs = await self.q.get_on_neighbours(on)
+                    return np.array([int(float(ef[2])) for ef in neighs if ef[0] == 'vn' and ef[1] == 'action'])
+
             
-            return np.array([int(float(ef[2])) for ef in best_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'action'])
+            # best_sa = await self._search_for_best_action(state, 'pick_action')
+
+            # if best_sa is None:
+            #     return self._get_random_action()
+
+            # # TODO: handles only one-dimensional action space
+            # best_sa_neigh_nodes = await self.q.get_on_neighbours(int(best_sa))
+            # # print(f'Best sa neigh nodes: {best_sa_neigh_nodes}')
+
+            # if best_sa_neigh_nodes == []:
+            #     return self._get_random_action()
+            
+            # return np.array([int(float(ef[2])) for ef in best_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'action'])
         
         
 
@@ -340,48 +381,69 @@ class TD_AGDS(TD):
         last_sa_value = await self._search_for_action_value(self._last_state, self._last_action, 'last_sa_value_search')
         updated_last_sa_value = await self._updated_q_value(last_sa_value, next_state, next_action, reward)
 
-        # TODO: handles only one-dimensional action space
-        # TODO: handles only float values for VNGs
-        new_observation = {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
-                                    list(self._state_space_feature_names) + ['value', 'action'], 
-                                    self._last_state.tolist() + [updated_last_sa_value, self._last_action[0]]
-                                )}
-        
-        new_on_index = await self.q.add_observation(new_observation, self._step_nr)
-        await self._poison(new_on_index, self._last_action)
+        await self._store_observation(self._last_state, self._last_action, updated_last_sa_value)
 
 
     async def _set_known_q_value(self, state, action, value):
-        # print(f'{self._timestamp()} Setting known Q value in step {self._step_nr} for state {state} and action {action} to {value}')
+        # state_on = await self.q.get_on_for_exact_vn_values(
+        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
+        #     {'action': float(action[0])}    # TODO: handles only one-dimensional action space
+        # )
+        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
+        # print(f"Setting known Q-value for state={state_on}, action={action} to value={value}")
+        # print("\n")
 
-        # TODO: handles only one-dimensional action space
-        # TODO: handles only float values for VNGs
-        observation = {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
-                                list(self._state_space_feature_names) + ['value', 'action'], 
-                                state.tolist() + [value, action[0]]
-                            )}
-        
-        new_on_index = await self.q.add_observation(observation, self._step_nr)
-        await self._poison(new_on_index, action, 'poison_known_q_value')
+        await self._store_observation(state, action, value)
+
+
+    async def _store_observation(self, state, action, value):
+        # handles only float values for VNGs
+        state_repr = {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
+                                    list(self._state_space_feature_names), 
+                                    state.tolist()
+                                )}
+        action_repr = { 'action': float(action[0]) }   # TODO: handles only one-dimensional action space
+        value_repr = { 'value': float(value) }
+
+        new_observation = state_repr | action_repr | value_repr
+        on_for_state_action = await self.q.get_on_for_exact_vn_values(state_repr | action_repr)
+
+        if on_for_state_action is None:
+            new_on_index = await self.q.add_observation(new_observation, self._step_nr)
+            # await self._poison(new_on_index, self._last_action)
+        else:
+            await self.q.reconnect_on(on_for_state_action, state_repr | action_repr, value_repr, self._step_nr)
 
 
     async def _search_for_action_value(self, state, action, stimulation_name):
-        sa_value_search = self._setup_search_from_state(
-            state,
-            ong_mode=associata.NodeGroupMode.transitive,
-            action_mode=associata.NodeGroupMode.responsive_exciation,
-            value_mode=associata.NodeGroupMode.accumulative
+        sa = await self.q.get_on_for_exact_vn_values(
+            {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
+            {'action': float(action[0])}    # TODO: handles only one-dimensional action space
         )
-        sa_value_search = self._add_search_from_action(action, sa_value_search)
-        sa_value = await self._infere_and_get_max_from_vng(
-            'value',
-            sa_value_search,
-            self.min_passed_stimulus_vng,
-            self.min_vn_excitation,
-            stimulation_name
-        )
+        
+        if sa is None:
+            return 0.0
+        else:
+            sa_value_neigh_nodes = await self.q.get_on_neighbours(sa)
+            sa_value = [float(ef[2]) for ef in sa_value_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
+            return float(sa_value)
 
-        return float(sa_value) if sa_value is not None else 0.0
+        # sa_value_search = self._setup_search_from_state(
+        #     state,
+        #     ong_mode=associata.NodeGroupMode.transitive,
+        #     action_mode=associata.NodeGroupMode.responsive_exciation,
+        #     value_mode=associata.NodeGroupMode.accumulative
+        # )
+        # sa_value_search = self._add_search_from_action(action, sa_value_search)
+        # sa_value = await self._infere_and_get_max_from_vng(
+        #     'value',
+        #     sa_value_search,
+        #     self.min_passed_stimulus_vng,
+        #     self.min_vn_excitation,
+        #     stimulation_name
+        # )
+
+        # return float(sa_value) if sa_value is not None else 0.0
 
 
     async def _search_for_best_action(self, state, stimulation_name):
@@ -498,11 +560,20 @@ class SarsaAGDS(TD_AGDS):
         next_sa_value = await self._search_for_action_value(next_state, next_action, 'next_sa_value_search')        
         new_q_value = last_sa_value + self.alpha * (reward + self.gamma * next_sa_value - last_sa_value)
 
-        print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
-        print(f"Last state={self._last_state}, last action={self._last_action}, last Q-value={last_sa_value}, reward={reward}")
-        print(f"Next state={next_state}, next action={next_action}, next Q-value={next_sa_value}")
-        print(f"Computation: new Q-value = {last_sa_value} + {self.alpha} * ({reward} + {self.gamma} * {next_sa_value} - {last_sa_value}) = {new_q_value}")
-        print("\n")
+        # last_state_on = await self.q.get_on_for_exact_vn_values(
+        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, self._last_state.tolist())} | 
+        #     {'action': float(self._last_action[0])}    # TODO: handles only one-dimensional action space
+        # )
+        # next_state_on = await self.q.get_on_for_exact_vn_values(
+        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, next_state.tolist())} | 
+        #     {'action': float(next_action[0])}    # TODO: handles only one-dimensional action space  
+        # )
+
+        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
+        # print(f"Last state={last_state_on}, last action={self._last_action}, last Q-value={last_sa_value}, reward={reward}")
+        # print(f"Next state={next_state_on}, next action={next_action}, next Q-value={next_sa_value}")
+        # print(f"Computation: new Q-value = {last_sa_value} + {self.alpha} * ({reward} + {self.gamma} * {next_sa_value} - {last_sa_value}) = {new_q_value}")
+        # print("\n")
 
         return new_q_value
 

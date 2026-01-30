@@ -46,6 +46,12 @@ Naukowo ;) :
 
 
 
+Polecenia uruchamiające:
+_build\default\rel\aas\bin\aas.cmd foreground
+.\asvis.cmd "C:\Users\adams\Doktorat\aasociata\pyassoc\experiments" "associata@Beast" "aas_vis@Beast" "aas_cookie"
+
+
+
 
 SarsaAGDS:
 - use excitation of best sa as alpha parameter (dynamic step size equal to/proportional to strength of association)

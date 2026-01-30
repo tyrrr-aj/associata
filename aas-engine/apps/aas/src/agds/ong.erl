@@ -1,5 +1,5 @@
 -module(ong).
--export([create_ONG/2, new_ON/2, stimulate/3, get_excitation/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
+-export([create_ONG/2, new_ON/2, stimulate/3, get_ON/2, get_all_ON_indices/1, get_excitation/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
 -export([remove_killed_ON/2]).
 -export([reset_after_deadlock/1]).
 
@@ -29,6 +29,19 @@ stimulate(ONG, Stimuli, StimulationSpec) ->
 remove_killed_ON(ONG, ONIndex) -> 
     ONG ! {remove_killed_ON, self(), ONIndex}.
 
+
+    
+get_ON(ONG, ONIndex) ->
+    ONG ! {get_on, ONIndex, self()},
+    receive
+        {on, ON} -> ON
+    end.
+
+get_all_ON_indices(ONG) ->
+    ONG ! {get_all_on_indices, self()},
+    receive
+        {all_on_indices, ONIndices} -> ONIndices
+    end.
 
 get_excitation(ONG, LastStimulationId) -> 
     ONG ! {get_excitation, self(), LastStimulationId},
@@ -108,6 +121,19 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
         {remove_killed_ON, _ON, ONIndex} ->
             NewONs = maps:remove(ONIndex, ONs),
             process_events(State#state{ons=NewONs});
+
+
+        {get_on, ONIndex, Asker} ->
+            case maps:get(ONIndex, ONs, none) of
+                none -> Asker ! {on, none};
+                ON -> Asker ! {on, ON}
+            end,
+            process_events(State);
+
+
+        {get_all_on_indices, Sender} ->
+            Sender ! {all_on_indices, maps:keys(ONs)},
+            process_events(State);
 
 
         {get_excitation, Sender, LastStimulationId} ->

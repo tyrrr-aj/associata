@@ -59,6 +59,12 @@ init(StructureId) ->
 
 process_events(State) ->
     receive
+        Msg ->
+            handle_message(Msg, State)
+    end.
+
+handle_message(Msg, State) ->
+    case Msg of
         subscription_init_ok ->
             process_events(State);
 
@@ -73,6 +79,16 @@ process_events(State) ->
         %% Values: #{VNGName := ObservedValue}
         {add_observation, ExperimentStep, Values} ->
             NewState = add_observation_impl(ExperimentStep, Values, State),
+            process_events(NewState);
+
+        %% VNValues: #{VNGName := Value}
+        {get_on_for_exact_vn_values, VNValues} ->
+            NewState = get_on_for_exact_vn_values(VNValues, State),
+            process_events(NewState);
+
+        %% ONIndex: integer, VNValues: #{VNGName := Value}
+        {reconnect_on, ExperimentStep, ONIndex, ReconnectedVNValues, NewVNValues} ->
+            NewState = reconnect_on_impl(ExperimentStep, ONIndex, ReconnectedVNValues, NewVNValues, State),
             process_events(NewState);
 
         % StimulationName: string, any name by which stimulaiton will be available in visualization
@@ -147,6 +163,29 @@ add_observation_impl(ExperimentStep, Values, #state{vngs = VNGs, ong = ONG, obs_
 
     pyrlang:send_client(State#state.structure_id, {new_on_index, NewONIndex}),
     State#state{obs_count = ObsCount + 1}.
+
+
+reconnect_on_impl(ExperimentStep, ONIndex, _ReconnectedVNValues, NewVNValues, #state{vngs = VNGs, ong = ONG} = State) ->
+    ON = ong:get_ON(ONG, ONIndex),
+
+    % maps:foreach(fun(VNGName, Value) ->
+    %     VNG = maps:get(VNGName, VNGs),
+    %     vng:reconnect_vn_to_on(VNG, Value, ON, ONIndex, ExperimentStep)
+    % end, ReconnectedVNValues),
+    maps:foreach(fun(VNGName, Value) ->
+        VNG = maps:get(VNGName, VNGs),
+        vng:add_value(ExperimentStep, VNG, Value, ON, ONIndex)
+    end, NewVNValues),
+    NewVNs = maps:fold(fun(VNGName, _Value, Acc) -> 
+        VNG = maps:get(VNGName, VNGs),
+        {ok, VN} = vng:wait_for_value_added(VNG),
+        Acc#{VNGName => VN}
+    end, #{}, NewVNValues),
+
+    on:remove_outdated_connections(ON, NewVNs, ExperimentStep),
+
+    pyrlang:send_client(State#state.structure_id, on_reconnected),
+    State.
 
 
 infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, #state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
@@ -235,6 +274,43 @@ get_structure_size_impl(#state{structure_id = StructureId, vngs = VNGs, ong = ON
     pyrlang:send_client(StructureId, {structure_size, VNGsSize + ONGSize}),
     State.
     
+
+get_on_for_exact_vn_values(VNValues, #state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
+    AllONIndices = ong:get_all_ON_indices(ONG),
+    ONs = maps:fold(fun(VNGName, Value, Acc) -> 
+        case sets:is_empty(Acc) of
+            true -> Acc;
+            false -> 
+                VNG = maps:get(VNGName, VNGs),
+                VN = vng:get_vn(VNG, Value),
+                ConnectedONIndices = case VN of
+                    none -> [];
+                    _ -> vn:get_neigh_on_indices(VN)
+                end,
+                sets:intersection(Acc, sets:from_list(ConnectedONIndices))
+        end
+    end, sets:from_list(AllONIndices), VNValues),
+
+    ONIndex = case sets:size(ONs) of
+        0 -> none;
+        1 -> hd(sets:to_list(ONs));
+        Size -> 
+            case maps:size(VNValues) < maps:size(VNGs) of
+                true -> 
+                    list_to_tuple(sets:to_list(ONs)); % returning tuple because returning list did not work with pyrlang
+                false ->
+                    ONsList = sets:to_list(ONs),
+                    io:format("ERROR: Multiple ONs matched for exact VN values!~n"),
+                    io:format("  VN Values: ~p~n", [VNValues]),
+                    io:format("  Matched ONs count: ~p~n", [Size]),
+                    io:format("  Matched ON indices: ~w~n", [ONsList]),
+                    error({multiple_ons_for_exact_vn_values, VNValues, Size, ONsList})
+            end
+    end,
+
+    pyrlang:send_client(StructureId, {on_for_exact_vn_values, ONIndex}),
+    State.
+
 
 stop_impl(#state{structure_id = StructureId} = State) ->
     pyrlang:send_client(StructureId, structure_stopped),

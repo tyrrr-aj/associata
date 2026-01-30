@@ -10,6 +10,8 @@
         get_excitation/2,
         get_neighbours/1,
         get_neigh_vns/1,
+        get_neigh_on_indices/1,
+        is_connected_to_on/2,
         delete/1,
         reset_after_deadlock/1
     ]).
@@ -56,11 +58,21 @@ connect_ON(ThisVN, ON, ONIndex) ->
     ThisVN ! {connect_ON, self(), ON, ONIndex},
     receive
         {on_connected, ThisVN, ON} -> ok;
-        {remove_killed_vn, ReprValue, ThisVN} -> vng:remove_killed_vn(self(), ReprValue, ThisVN)
+        {already_connected, ThisVN, ON} -> already_connected;
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
+            ok
     end.
 
 
-disconnect_ON(ThisVN, ON, ExperimentStep) -> ThisVN ! {disconnect_ON, ON, ExperimentStep}.
+disconnect_ON(ThisVN, ON, ExperimentStep) -> 
+    ThisVN ! {disconnect_ON, self(), ON, ExperimentStep},
+    receive
+        {on_disconnected, ThisVN, ON} -> ok;
+        {remove_killed_vn, ReprValue, ThisVN} ->
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
+            ok
+    end.
 
 % Direction - of information flow, i.e. from DisconnectedVN to ThisVN
 disconnect_VN(ThisVN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep) -> ThisVN ! {disconnect_VN, Direction, DisconnectedVN, ReplacementVN, IntermediateZombies, ExperimentStep}.
@@ -102,6 +114,26 @@ get_neigh_vns(ThisVN) ->
         {remove_killed_vn, ReprValue, ThisVN} -> 
             vng:remove_killed_vn(self(), ReprValue, ThisVN),
             {none, none}
+    end.
+
+
+get_neigh_on_indices(ThisVN) ->
+    ThisVN ! {get_neigh_on_indices, self()},
+    receive
+        {neigh_on_indices, ThisVN, Neighbours} -> Neighbours;
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
+            []
+    end.
+
+
+is_connected_to_on(ThisVN, ON) ->
+    ThisVN ! {is_connected_to_on, ON, self()},
+    receive
+        {is_connected_to_on, ThisVN, ON, Result} -> Result;
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
+            false
     end.
 
 
@@ -163,7 +195,7 @@ process_events(#state{
                 experiment_step=ExperimentStep,
                 name=StimulationName,
                 write_to_log=WriteToLog,
-                kind=StimulationKind, 
+                kind=_StimulationKind, 
                 node_group_modes=NodeGroupModes,
                 min_passed_stimulus=MinPassedStimulus
             }=StimulationSpec
@@ -237,7 +269,7 @@ process_events(#state{
                         accumulative -> [];
                         transitive ->
                             if
-                                ONStimulus >= MinPassedStimulus -> 
+                                Stimulus >= MinPassedStimulus -> % CHANGED to consider the VN stimulus, not the weighted onne
                                     [ON || ON <- maps:keys(ConnectedONs), ON =/= Source];
                                 true -> []
                             end
@@ -326,13 +358,18 @@ process_events(#state{
 
 
         {connect_ON, Asker, ON, ONIndex} -> 
-            Asker ! {on_connected, self(), ON},
+            ResponseCode = case maps:is_key(ON, ConnectedONs) of
+                true -> already_connected;
+                false -> on_connected
+            end,
+            Asker ! {ResponseCode, self(), ON},
             process_events(State#state{connected_ons=ConnectedONs#{ON => ONIndex}});
 
 
-        {disconnect_ON, ON, ExperimentStep} ->
+        {disconnect_ON, Asker, ON, ExperimentStep} ->
             NewConnectedONs = maps:remove(ON, ConnectedONs),
             vng:notify_VNG_to_ON_conn_count_decremented(VNG),
+            report:connection_broken(self(), ON, ExperimentStep, Reporter),
             
             if 
                 map_size(NewConnectedONs) == 0 -> 
@@ -355,10 +392,12 @@ process_events(#state{
                     end,
 
                     vng:remove_killed_vn(VNG, RepresentedValue, self()),
+                    Asker ! {on_disconnected, self(), ON},
                     zombie_wait_for_orhpan_messages(StimulatedNeighs, ConnectedVNs, sets:from_list(VNsPendingDisconnection, [{version, 2}]), ON);
 
                 true -> 
                     on:confirm_death_notification(ON, self()),
+                    Asker ! {on_disconnected, self(), ON},
                     process_events(State#state{connected_ons=NewConnectedONs})
             end;
 
@@ -436,6 +475,17 @@ process_events(#state{
             Asker ! {neigh_vns, self(), ConnectedVNs},
             process_events(State);
 
+
+        {get_neigh_on_indices, Asker} ->
+            Asker ! {neigh_on_indices, self(), maps:values(ConnectedONs)},
+            process_events(State);
+
+
+        {is_connected_to_on, ON, Asker} ->
+            Result = maps:is_key(ON, ConnectedONs),
+            Asker ! {is_connected_to_on, self(), ON, Result},
+            process_events(State);
+
     
         delete -> ok;
 
@@ -449,10 +499,12 @@ process_events(#state{
 
 
 weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
-    1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
+    % 1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
+    % abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
+    1.0.
 
 
-weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 1.
+weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 1 / maps:size(ConnectedONs).
 
 
 report_breaking_connection(none, _NewConnectedVN, _ExperimentStep, _GlobalCfg) -> ok;
