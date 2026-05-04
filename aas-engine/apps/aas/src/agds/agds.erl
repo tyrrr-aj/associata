@@ -58,8 +58,10 @@ init(StructureId) ->
 %% %%%%%%%%%%%%%%% Main loop %%%%%%%%%%%%%%%
 
 process_events(State) ->
+    % io:format("AGDS waiting for message...~n"),
     receive
         Msg ->
+            % io:format("Message received: ~p~n", [Msg]),
             handle_message(Msg, State)
     end.
 
@@ -119,6 +121,14 @@ handle_message(Msg, State) ->
 
         {get_neighbours, on, ONIndex} ->
             NewState = get_neighbours_impl(on, ONIndex, State),
+            process_events(NewState);
+
+        {dbg_get_vns, VNGName, Caller} ->
+            NewState = dbg_get_vns_impl(VNGName, Caller, State),
+            process_events(NewState);
+
+        {dbg_get_ons, Caller} ->
+            NewState = dbg_get_ons_impl(Caller, State),
             process_events(NewState);
 
         get_structure_size ->
@@ -263,7 +273,29 @@ get_neighbours_impl(vn, VNGName, Value, #state{structure_id = StructureId, vngs 
     
 
 get_neighbours_impl(on, ONIndex, #state{structure_id = StructureId, ong = ONG} = State) ->
-    pyrlang:send_client(StructureId, {neighbours, ong:get_neighbours(ONG, ONIndex)}),
+    Neighs = ong:get_neighbours(ONG, ONIndex),
+    pyrlang:send_client(StructureId, {neighbours, Neighs}),
+    State.
+
+
+dbg_get_vns_impl(VNGName, Caller, #state{vngs = VNGs} = State) ->
+    case maps:get(VNGName, VNGs, non_existing_vng) of
+        non_existing_vng -> Caller ! {vns_for_vng, non_existing_vng};
+        VNG -> 
+            VNs = vng:get_all_vns(VNG),
+            Caller ! {vns_for_vng, {VNGName, VNs}}
+    end,
+    State.
+
+
+dbg_get_ons_impl(Caller, #state{ong = ONG} = State) ->
+    ONIndices = ong:get_all_ON_indices(ONG),
+    ONInfo = lists:map(fun(ONIndex) -> 
+        ON = ong:get_ON(ONG, ONIndex),
+        Neighs = on:get_neighbours(ON),
+        {ONIndex, ON, Neighs}
+    end, ONIndices),
+    Caller ! {ons, ONInfo},
     State.
 
 

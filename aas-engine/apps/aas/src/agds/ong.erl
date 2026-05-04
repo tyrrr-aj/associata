@@ -146,7 +146,10 @@ process_events(#state{ons=ONs, next_on_index=NextONIndex, stimulated_ons=Stimula
         {get_neighbours, ONIndex, Asker} ->
             case maps:get(ONIndex, ONs, none) of
                 none -> Asker ! {neighbours, {badkey, ONIndex}};
-                ON -> Asker ! {neighbours, on:get_neighbours(ON)}
+                ON -> 
+                    ONNeighs = on:get_neighbours(ON),
+                    ONNeighsFormatted = [{vn, VNGName, ReprValue} || {vn, VNGName, ReprValue, _VN} <- ONNeighs],
+                    Asker ! {neighbours, ONNeighsFormatted}
             end,
             
             process_events(State);

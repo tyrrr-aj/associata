@@ -272,7 +272,7 @@ class AGDS(AAS):
     
     async def get_on_neighbours(self, on_index):
         # print(f'{timestamp_str()}    getting neighbours for on: {on_index}')
-        neighs = await self._query_backend((Atom('get_neighbours'), Atom('on'), on_index), self._parse_neighbours_response)
+        neighs = await self._query_backend((Atom('get_neighbours'), Atom('on'), int(on_index)), self._parse_neighbours_response)
         # print(f'{timestamp_str()}    got neighbours for on {on_index}: {neighs}')
         return neighs
     
@@ -296,8 +296,11 @@ class AGDS(AAS):
         
 
     async def _query_backend(self, query, parse_response_fn):
+        # print(f'{timestamp_str()}    sending query: {query}')
         await self._channel.send_backend_async(query)
+        # print(f'{timestamp_str()}    waiting for query response')
         response = await self._channel.receive_async(self._query_timeout_sec)
+        # print(f'{timestamp_str()}    got query response: {response}')
         return parse_response_fn(response)
 
 

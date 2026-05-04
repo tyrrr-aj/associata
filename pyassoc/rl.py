@@ -415,26 +415,16 @@ class TD_AGDS(TD):
             await self.q.reconnect_on(on_for_state_action, state_repr | action_repr, value_repr, self._step_nr)
 
 
-    async def _search_for_action_value(self, state, action, stimulation_name):
-        sa = await self.q.get_on_for_exact_vn_values(
-            {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
-            {'action': float(action[0])}    # TODO: handles only one-dimensional action space
-        )
-        
-        if sa is None:
-            return 0.0
-        else:
-            sa_value_neigh_nodes = await self.q.get_on_neighbours(sa)
-            sa_value = [float(ef[2]) for ef in sa_value_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
-            return float(sa_value)
+    async def _get_assoc_action_value(self, state, action, stimulation_name):
+        # DIRECT VNG "Value" SEARCH
 
-        # sa_value_search = self._setup_search_from_state(
-        #     state,
-        #     ong_mode=associata.NodeGroupMode.transitive,
-        #     action_mode=associata.NodeGroupMode.responsive_exciation,
-        #     value_mode=associata.NodeGroupMode.accumulative
-        # )
-        # sa_value_search = self._add_search_from_action(action, sa_value_search)
+        sa_value_search = self._setup_search_from_state(
+            state,
+            ong_mode=associata.NodeGroupMode.transitive,
+            action_mode=associata.NodeGroupMode.responsive_exciation,
+            value_mode=associata.NodeGroupMode.accumulative
+        )
+        sa_value_search = self._add_search_from_action(action, sa_value_search)
         # sa_value = await self._infere_and_get_max_from_vng(
         #     'value',
         #     sa_value_search,
@@ -443,7 +433,67 @@ class TD_AGDS(TD):
         #     stimulation_name
         # )
 
-        # return float(sa_value) if sa_value is not None else 0.0
+        sa_value = await self._infere_and_get_weighted_avg_from_vng(
+            'value',
+            sa_value_search,
+            self.min_passed_stimulus_vng,
+            self.min_vn_excitation,
+            stimulation_name
+        )
+        
+        return float(sa_value) if sa_value is not None else 0.0
+
+
+        # CLOSEST ON -> VN "Value" SEARCH
+
+        # sa_value_search = self._setup_search_from_state(
+        #     state,
+        #     ong_mode=associata.NodeGroupMode.accumulative,
+        #     action_mode=associata.NodeGroupMode.responsive_exciation,
+        #     value_mode=associata.NodeGroupMode.passive
+        # )
+        # sa_value_search = self._add_search_from_action(action, sa_value_search)
+
+        # closest_sa = await self._infere_and_get_max_from_ong(
+        #     sa_value_search,
+        #     self.min_passed_stimulus_ong,
+        #     self.min_on_excitation,
+        #     stimulation_name
+        # )
+
+        # print (f'get_assoc_action_value: closest ON for state={state}, action={action} is {closest_sa}')
+
+        # if closest_sa is None:
+        #     return 0.0
+        # else:
+        #     closest_sa_neigh_nodes = await self.q.get_on_neighbours(closest_sa)
+        #     sa_value = [float(ef[2]) for ef in closest_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
+        #     return float(sa_value)
+
+
+    async def _search_for_action_value(self, state, action, stimulation_name):
+        # sa = await self.q.get_on_for_exact_vn_values(
+        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
+        #     {'action': float(action[0])}    # TODO: handles only one-dimensional action space
+        # )
+        
+        # direct_value = None
+        assoc_value = await self._get_assoc_action_value(state, action, stimulation_name)
+
+        # if sa is None:
+        #     # # return 0.0
+        #     # assoc_value = await self._get_assoc_action_value(state, action, stimulation_name)
+        #     pass
+        # else:
+        #     sa_value_neigh_nodes = await self.q.get_on_neighbours(sa)
+        #     sa_value = [float(ef[2]) for ef in sa_value_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
+        #     direct_value = float(sa_value)
+
+        # if direct_value is not None and direct_value != assoc_value:
+        #     print(f'DISCREPENCY at step {self._step_nr} for state={state}, action={action}:')
+        #     print("Direct value: " + (f"{direct_value:.4f}" if direct_value is not None else "None") + f" (ON: {sa}), Associated value: {assoc_value:.4f}")
+
+        return assoc_value
 
 
     async def _search_for_best_action(self, state, stimulation_name):
@@ -521,11 +571,28 @@ class TD_AGDS(TD):
     
     
     async def _infere_and_get_max_from_vng(self, vng_name, setup, min_passed_stimulus, min_vn_excitation, stimulation_name):
+        important_excitations = await self._infere_and_get_important_excitations_from_vng(vng_name, setup, min_passed_stimulus, min_vn_excitation, stimulation_name)
+        return self._get_maximizing_key(important_excitations)
+
+    
+    async def _infere_and_get_weighted_avg_from_vng(self, vng_name, setup, min_passed_stimulus, min_vn_excitation, stimulation_name):
+        important_excitations = await self._infere_and_get_important_excitations_from_vng(vng_name, setup, min_passed_stimulus, min_vn_excitation, stimulation_name)
+
+        if len(important_excitations) == 0:
+            return None
+
+        total_excitation = sum(important_excitations.values())
+        weighted_avg_key = sum(k * v for k, v in important_excitations.items()) / total_excitation
+
+        return weighted_avg_key
+    
+
+    async def _infere_and_get_important_excitations_from_vng(self, vng_name, setup, min_passed_stimulus, min_vn_excitation, stimulation_name):
         await self.q.infere(setup, min_passed_stimulus, self._step_nr, stimulation_name)
         excitations = await self.q.get_excitations_for_vng(vng_name)
         important_excitations = {k: v for k, v in excitations.items() if v > min_vn_excitation}
 
-        return self._get_maximizing_key(important_excitations)
+        return important_excitations
     
 
     async def _infere_and_get_max_from_ong(self, setup, min_passed_stimulus, min_on_excitation, stimulation_name):

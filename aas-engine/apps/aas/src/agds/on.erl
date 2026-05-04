@@ -1,7 +1,7 @@
 -module(on).
 -export([
     create_ON/4, 
-    connect_VN/4, 
+    connect_VN/3, 
     disconnect_VN/2, 
     remove_outdated_connections/3,
     confirm_death_notification/2,
@@ -32,8 +32,8 @@
 create_ON(ONG, ONIndex, ExperimentStep, GlobalCfg) -> spawn(fun() -> init(ONG, ONIndex, ExperimentStep, GlobalCfg) end).
 
 
-connect_VN(ON, VN, ReprValue, VNGName) -> 
-    ON ! {connect, self(), VN, ReprValue, VNGName},
+connect_VN(ON, VN, VNGName) -> 
+    ON ! {connect, self(), VN, VNGName},
     receive 
         {vn_connected, VN, ON} -> ok 
     end.
@@ -144,6 +144,8 @@ process_events(#state{
                     EffectiveStimulus = get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
 
+                    % io:format("[Step ~p | ~p] ON ~p: Received stimulus ~p from ~p at depth ~p. Effective stimulus: ~p. New excitation: ~p~n", [ExperimentStep, StimulationName, ONIndex, Stimulus, Source, CurrDepth, EffectiveStimulus, NewExcitation]),
+
                     report:node_stimulated(WriteToLog, self(), Source, NewExcitation, EffectiveStimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
 
                     {NewStimulatedNeighs, StimulatingNeighsFinished} = if
@@ -225,7 +227,7 @@ process_events(#state{
             process_events(State#state{stimulated_neighs=NewStimulatedNeighs});
 
 
-        {connect, Asker, VN, ReprValue, VNGName} ->
+        {connect, Asker, VN, VNGName} ->
             % Disconnect any prevoiously connected VN from the same VNG
             % ExistingVNsForVNG = [ExistingVN || {ExistingVN, {_ExistingReprValue, ExistingVNGName}} <- maps:to_list(ConnectedVNs), ExistingVNGName =:= VNGName],
             % lists:foreach(fun(ExistingVN) ->
@@ -233,7 +235,7 @@ process_events(#state{
             % end, ExistingVNsForVNG),
 
             Asker ! {vn_connected, VN, self()},
-            process_events(State#state{connected_vns=ConnectedVNs#{VN => {ReprValue, VNGName}}});
+            process_events(State#state{connected_vns=ConnectedVNs#{VN => VNGName}});
 
 
         {disconnect, VN} ->
@@ -242,7 +244,7 @@ process_events(#state{
 
         {remove_outdated_connections, AffectedVNGsAndCurrVNs, ExperimentStep, Sender} -> 
             NewConnectedVNs = maps:filter(
-                fun(VN, {_ReprValue, VNGName}) -> 
+                fun(VN, VNGName) -> 
                     case maps:get(VNGName, AffectedVNGsAndCurrVNs, none) of
                         none -> true;
                         VN -> true;
@@ -269,7 +271,7 @@ process_events(#state{
         
 
         {get_neighbours, Asker} -> 
-            Response = [{vn, VNGName, ReprValue} || {ReprValue, VNGName} <- maps:values(ConnectedVNs)],
+            Response = [{vn, VNGName, vn:get_repr_value(VN), VN} || {VN, VNGName} <- maps:to_list(ConnectedVNs)],
             Asker ! {neighbours, self(), Response},
             process_events(State);
 
@@ -291,8 +293,8 @@ weight_poisoning(PoisonLvl) -> PoisonLvl.
 get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, #stim_spec{kind=StimulationKind}=StimulationSpec) ->
     AmplifiedStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
     PoisonLvl = case maps:get(Source, ConnectedVNs, undefined) of
-        {_ReprValue, VNGName} -> maps:get(VNGName, AccPoisonLvls, 0.0);
-        undefined -> 0.0
+        undefined -> 0.0;
+        VNGName -> maps:get(VNGName, AccPoisonLvls, 0.0)
     end,
     WeightedStimulus = case StimulationKind of
         poisoning -> AmplifiedStimulus;
@@ -311,7 +313,7 @@ accumulate_poison(ONG, CurrAccPoisonLvls, LastExcitation, NewExcitation, Effecti
     case maps:is_key(Source, ConnectedVNs) of
         false -> CurrAccPoisonLvls;  % Source not a VN or not connected
         true ->
-            {_ReprValue, VNGName} = maps:get(Source, ConnectedVNs),
+            VNGName = maps:get(Source, ConnectedVNs),
             CurrForVNG = maps:get(VNGName, CurrAccPoisonLvls, 0.0),
             NewForVNG = if
                 Source =:= ONG -> CurrForVNG;  % safeguard, though maps:is_key(Source, ConnectedVNs) false for ONG
@@ -327,7 +329,7 @@ accumulate_poison(ONG, CurrAccPoisonLvls, LastExcitation, NewExcitation, Effecti
     end.
 
 deadly_poison_reached_for_all_vngs(AccPoisonLvls, ConnectedVNs, DeadlyDose) ->
-    VNGNames = lists:usort([VNGName || {_VN,{_ReprValue,VNGName}} <- maps:to_list(ConnectedVNs), VNGName =/= "action" andalso VNGName =/= "value" ]),
+    VNGNames = lists:usort([VNGName || VNGName <- maps:values(ConnectedVNs), VNGName =/= "action" andalso VNGName =/= "value" ]),
     lists:all(fun(VNGName) -> maps:get(VNGName, AccPoisonLvls, 0.0) >= DeadlyDose end, VNGNames).
 
 
@@ -345,7 +347,7 @@ stimulate_vns(
 ) ->
     StimulatedVNs = if
         EffectiveStimulus >= MinPassedStimulus -> [
-                VN || {VN, {_ReprValue, VNGName}} <- maps:to_list(ConnectedVNs), 
+                VN || {VN, VNGName} <- maps:to_list(ConnectedVNs), 
                                                     ng:is_accumulative(VNGName, NodeGroupModes) orelse (ng:is_transitive(VNGName, NodeGroupModes) andalso StimulationKind =:= poisoning)
             ];
         true -> []
@@ -386,7 +388,7 @@ stimulate_vns(
 
 
 amplify_stimulus_with_responsive_vns(Stimulus, Depth, ConnectedVNs, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec) ->
-    ResponsiveNeighVNs = [VN || {VN, {_ReprValue, VNG}} <- maps:to_list(ConnectedVNs), ng:is_responsive(VNG, NodeGroupModes)],
+    ResponsiveNeighVNs = [VN || {VN, VNG} <- maps:to_list(ConnectedVNs), ng:is_responsive(VNG, NodeGroupModes)],
 
     case ResponsiveNeighVNs of
         [] -> Stimulus;

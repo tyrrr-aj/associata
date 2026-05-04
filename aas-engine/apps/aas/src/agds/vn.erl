@@ -7,6 +7,7 @@
         confirm_vn_disconnected/3,
         update_VNG_to_ON_conn_count/2,
         stimulate/4, 
+        get_repr_value/1,
         get_excitation/2,
         get_neighbours/1,
         get_neigh_vns/1,
@@ -26,6 +27,7 @@
                 repr_value,             % any
                 connected_vns,          % {{pid, float} | none, {pid, float} | none} | na
                 connected_ons,          % #{pid := integer}
+                n_occurances,           % integer, may be different than maps:size(connected_ons) if there are duplicate ONs
                 last_excitation,        % float
                 last_stimulation_id,    % none | integer
                 stimulated_neighs,      % #{integer => {#{pid := int}, #{pid := int}}}
@@ -85,6 +87,16 @@ update_VNG_to_ON_conn_count(ThisVN, NewEntireVNGConnCount) -> ThisVN ! {update_V
 
 stimulate(ThisVN, Stimulus, CurrDepth, StimulationSpec) -> 
     ThisVN ! {stimulate, self(), Stimulus, CurrDepth, StimulationSpec}.
+
+
+get_repr_value(ThisVN) -> 
+    ThisVN ! {get_repr_value, self()},
+    receive
+        {repr_value, ThisVN, ReprValue} -> ReprValue;
+        {remove_killed_vn, ReprValue, ThisVN} -> 
+            vng:remove_killed_vn(self(), ReprValue, ThisVN),
+            none
+    end.
 
 
 get_excitation(ThisVN, LastStimulationId) -> 
@@ -159,6 +171,7 @@ init(VNType, RepresentedValue, VNG, VNGName, EntireVNGConnCount, VNGMinValue, VN
         repr_value=RepresentedValue, 
         connected_vns=case VNType of categorical -> na; numerical -> {none, none} end,
         connected_ons=#{}, 
+        n_occurances = 1,
         last_excitation=0.0, 
         last_stimulation_id=none,
         stimulated_neighs=#{},
@@ -176,6 +189,7 @@ process_events(#state{
         repr_value=RepresentedValue,
         connected_vns=ConnectedVNs, 
         connected_ons=ConnectedONs, 
+        n_occurances = 1,
         last_excitation=LastExcitation, 
         last_stimulation_id=LastStimulationId,
         stimulated_neighs=StimulatedNeighs,
@@ -231,7 +245,6 @@ process_events(#state{
                                         true -> (RepresentedValue - VNGMinValue) / (VNGMaxValue - VNGMinValue)
                                     end
                             end,
-                            report:node_stimulated(WriteToLog, self(), Source, ResStimulus, Stimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
                             stimulation:respond_to_stimulation(Source, ResStimulus),
                             process_events(State#state{last_excitation=CurrExcitation, last_stimulation_id=StimulationId})
                     end;
@@ -450,6 +463,11 @@ process_events(#state{
             process_events(State#state{vng_to_on_conn_count=NewEntireVNGConnCount});
 
 
+        {get_repr_value, Asker} ->
+            Asker ! {repr_value, self(), RepresentedValue},
+            process_events(State);
+
+
         {get_excitation, Asker, LastAgdsStimulationId} -> 
             Excitation = case LastAgdsStimulationId of
                 LastStimulationId -> LastExcitation;
@@ -500,11 +518,13 @@ process_events(#state{
 
 weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
     % 1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
-    % abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
-    1.0.
+    abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
+    % 1.0.
+ 
 
-
-weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 1 / maps:size(ConnectedONs).
+weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 
+    1 / maps:size(ConnectedONs).
+    % 1.0.    % Testing hypothesis that equal weight will make ON selection equivalent to tabular case. Most likely it breaks VN selection.
 
 
 report_breaking_connection(none, _NewConnectedVN, _ExperimentStep, _GlobalCfg) -> ok;

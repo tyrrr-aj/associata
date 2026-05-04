@@ -1,6 +1,6 @@
 -module(utils).
 
--export([get_timestamp_str/0, partition_map/2]).
+-export([get_timestamp_str/0, get_short_time_string/0, partition_map/2]).
 
 
 get_timestamp_str() ->
@@ -14,6 +14,13 @@ get_timestamp_str() ->
         "~4..0B-~2..0B-~2..0B ~2..0B:~2..0B:~2..0B:~9..0B",
         [Year, Month, Day, Hour, Minute, Second, Nanos]
     )).
+
+
+get_short_time_string() ->
+    {{_Y, _Mo, _D}, {H, Mi, S}} = calendar:local_time(),
+    lists:flatten(
+      io_lib:format("~2..0w:~2..0w:~2..0w",
+                    [H, Mi, S])).
 
 
 partition_map(Fun, Map) ->

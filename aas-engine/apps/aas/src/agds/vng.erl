@@ -1,6 +1,6 @@
 -module(vng).
 -export([create_numerical_VNG/6, create_categorical_VNG/3, add_value/5, wait_for_value_added/1, reconnect_vn_to_on/5,
-        stimulate/3, get_excitation/2, get_vn/2, get_neighbours/2, get_number_of_nodes/1, delete/1]).
+        stimulate/3, get_excitation/2, get_vn/2, get_all_vns/1, get_neighbours/2, get_number_of_nodes/1, delete/1]).
 -export([remove_killed_vn/3, notify_VNG_to_ON_conn_count_incremented/1, notify_VNG_to_ON_conn_count_decremented/1]).
 -export([reset_after_deadlock/1]).
 -export([print_neighbourhoods/1]).
@@ -58,6 +58,13 @@ get_vn(VNG, ReprValue) ->
     receive
         {vn, none} -> none;
         {vn, VN} -> VN
+    end.
+
+
+get_all_vns(VNG) ->
+    VNG ! {get_all_vns, self()},
+    receive
+        {all_vns, VNs} -> VNs
     end.
 
 
@@ -191,7 +198,7 @@ process_events(#state{
                 false ->
                     % io:format("VNG ~p: Connecting VN ~p to ON ~p.~n", [VNGName, AddedValueBounded, RespectiveONIndex]),
                     vn:connect_ON(VN, RespectiveON, RespectiveONIndex),
-                    on:connect_VN(RespectiveON, VN, AddedValueBounded, VNGName),
+                    on:connect_VN(RespectiveON, VN, VNGName),
                     report:connection_formed(VN, RespectiveON, ExperimentStep, Reporter),
                     NewVNGtoONConnCount = VNGtoONConnCount + 1
             end,
@@ -297,6 +304,15 @@ process_events(#state{
                     end
             end,
             Caller ! {vn, VN},
+            process_events(State);
+
+
+        {get_all_vns, Caller} ->
+            VNsList = case VNGType of
+                categorical -> maps:to_list(VNs);
+                numerical -> avb_tree:items(VNs)
+            end,
+            Caller ! {all_vns, VNsList},
             process_events(State);
 
 

@@ -51,6 +51,19 @@ _build\default\rel\aas\bin\aas.cmd foreground
 .\asvis.cmd "C:\Users\adams\Doktorat\aasociata\pyassoc\experiments" "associata@Beast" "aas_vis@Beast" "aas_cookie"
 
 
+Dbg = fun(AgdsId) ->
+AgdsId ! {dbg_get_vns, "value", self()},
+AgdsId ! {dbg_get_ons, self()},
+receive {vns_for_vng, VNs} -> io:format("VNs: ~p~n", [VNs]) end,
+receive {ons, ONs} -> io:format("ONs: ~p~n", [ONs]) end 
+end.
+
+
+Trzeba sprawdzić (matematycznie) i przemyśleć wagi połączeń - obecnie bezpośrednie połączenie VN<->ON nie gwarantuje najsilniejszej asocjacji. Być może nie może?
+Warto zbadać:
+- wagi mnożone (obecnie przyjęte odejmowane)
+- wagi odejmowane - jak się to matematycznie zachowuje
+- wagi logarytmiczne - przyszłość!
 
 
 SarsaAGDS:
