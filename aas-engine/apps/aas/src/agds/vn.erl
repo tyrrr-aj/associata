@@ -205,11 +205,11 @@ process_events(#state{
             Stimulus, 
             CurrDepth, 
             #stim_spec{
-                id=StimulationId,
+                stimulation_id=StimulationId,
                 experiment_step=ExperimentStep,
-                name=StimulationName,
-                write_to_log=WriteToLog,
-                kind=_StimulationKind, 
+                stimulation_name=StimulationName,
+                should_write_to_log=WriteToLog,
+                stimulation_kind=_StimulationKind, 
                 node_group_modes=NodeGroupModes,
                 min_passed_stimulus=MinPassedStimulus
             }=StimulationSpec

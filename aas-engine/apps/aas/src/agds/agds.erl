@@ -203,14 +203,14 @@ infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGro
 
     StimulationId = erlang:unique_integer(),
     StimulationSpec = #stim_spec{
-        id=StimulationId, 
+        stimulation_id=StimulationId, 
         experiment_step=ExperimentStep,
-        name=StimulationName,
-        write_to_log=WriteToLog,
-        kind=inference, 
+        stimulation_name=StimulationName,
+        should_write_to_log=WriteToLog,
+        stimulation_kind=inference, 
         node_group_modes=NodeGroupModes, 
         min_passed_stimulus=MinPassedStimulus, 
-        params=#{}
+        poisoning_params=#{}
     },
 
     dbg_counter:add_inference(initial_stimulation_type(InitialStimuli), StimulationId, State#state.global_cfg#global_cfg.dbg_counter),
@@ -225,14 +225,14 @@ poison_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGro
 
     StimulationId = erlang:unique_integer(),
     StimulationSpec = #stim_spec{
-        id=StimulationId, 
+        stimulation_id=StimulationId, 
         experiment_step=ExperimentStep,
-        name=StimulationName,
-        write_to_log=WriteToLog,
-        kind=poisoning, 
+        stimulation_name=StimulationName,
+        should_write_to_log=WriteToLog,
+        stimulation_kind=poisoning, 
         node_group_modes=NodeGroupModes, 
         min_passed_stimulus=MinPassedStimulus, 
-        params=#{
+        poisoning_params=#{
             deadly_dose => DeadlyDose, 
             min_accumulated_dose => MinimumAccumulatedDose
         }
