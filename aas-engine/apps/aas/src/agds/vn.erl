@@ -185,11 +185,11 @@ process_events(#state{
         vn_type=VNType,
         vng=VNG,
         vng_name=VNGName,
-        vng_to_on_conn_count=EntireVNGConnCount,
+        vng_to_on_conn_count=_EntireVNGConnCount,
         repr_value=RepresentedValue,
         connected_vns=ConnectedVNs, 
         connected_ons=ConnectedONs, 
-        n_occurances = 1,
+        n_occurances = NOccurances,
         last_excitation=LastExcitation, 
         last_stimulation_id=LastStimulationId,
         stimulated_neighs=StimulatedNeighs,
@@ -211,7 +211,9 @@ process_events(#state{
                 should_write_to_log=WriteToLog,
                 stimulation_kind=_StimulationKind, 
                 node_group_modes=NodeGroupModes,
-                min_passed_stimulus=MinPassedStimulus
+                min_passed_stimulus=MinPassedStimulus, 
+                vn_to_vn_weight_mode=VNToVNWeightMode,
+                vn_to_on_weight_mode=VNToONWeightMode
             }=StimulationSpec
         } ->
             dbg_counter:add_stimulations({vn, VNGName}, 1, StimulationId, GlobalCfg#global_cfg.dbg_counter),
@@ -262,7 +264,7 @@ process_events(#state{
                         accumulative -> [];
                         transitive -> lists:foldl(
                                 fun({VN, NeighValue}, Acc) ->
-                                    NeighStimulus = lists:max([0, Stimulus - weight_vn_to_vn(NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue)]),
+                                    NeighStimulus = lists:max([0, get_weighted_vn_to_vn_stimulus(Stimulus, NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue, VNToVNWeightMode)]),
                                     if 
                                         NeighStimulus >= MinPassedStimulus -> 
                                             vn:stimulate(VN, NeighStimulus, NewDepth, StimulationSpec),
@@ -276,13 +278,13 @@ process_events(#state{
                         end,
 
                     % VN -> ON
-                    ONStimulus = Stimulus * weight_vn_to_on(ConnectedONs, EntireVNGConnCount),
+                    ONStimulus = get_weighted_vn_to_on_stimulus(Stimulus, ConnectedONs, NOccurances, VNToONWeightMode),
 
                     StimulatedONs = case CurrVNGMode of
                         accumulative -> [];
                         transitive ->
                             if
-                                Stimulus >= MinPassedStimulus -> % CHANGED to consider the VN stimulus, not the weighted onne
+                                Stimulus >= MinPassedStimulus -> % CHANGED to consider the VN stimulus, not the weighted one
                                     [ON || ON <- maps:keys(ConnectedONs), ON =/= Source];
                                 true -> []
                             end
@@ -515,16 +517,36 @@ process_events(#state{
     end.
 
 
+get_weighted_vn_to_vn_stimulus(NonWeightedStimulus, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue, VNToVNWeightMode) ->
+    case VNToVNWeightMode of
+        constant -> NonWeightedStimulus * weight_vn_to_vn(constant, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue);
+        classical_multiplicative -> NonWeightedStimulus * weight_vn_to_vn(classical_multiplicative, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue);
+        classical_subtractive -> NonWeightedStimulus - weight_vn_to_vn(classical_subtractive, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue)
+    end.
 
-weight_vn_to_vn(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
-    % 1.0 - abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
+
+weight_vn_to_vn(constant, _TargetReprValue, _OwnReprValue, _VNGMinValue, _VNGMaxValue) -> 1.0;
+
+weight_vn_to_vn(classical_subtractive, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
+    vn_to_vn_diff_over_range_vng(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue);
+
+weight_vn_to_vn(classical_multiplicative, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
+    1.0 - vn_to_vn_diff_over_range_vng(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue).
+
+vn_to_vn_diff_over_range_vng(TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue) ->
     abs(TargetReprValue - OwnReprValue) / (VNGMaxValue - VNGMinValue).
-    % 1.0.
  
 
-weight_vn_to_on(ConnectedONs, _EntireVNGConnCount) -> 
-    1 / maps:size(ConnectedONs).
-    % 1.0.    % Testing hypothesis that equal weight will make ON selection equivalent to tabular case. Most likely it breaks VN selection.
+get_weighted_vn_to_on_stimulus(NonWeightedStimulus, ConnectedONs, NumberOfVNOccurances, VNToONWeightMode) ->
+    NonWeightedStimulus * weight_vn_to_on(VNToONWeightMode, ConnectedONs, NumberOfVNOccurances).
+
+weight_vn_to_on(constant, _ConnectedONs, _NumberOfVNOccurances) -> 1.0;
+weight_vn_to_on(one_over_n_on, ConnectedONs, _NumberOfVNOccurances) -> 
+    1 / maps:size(ConnectedONs);
+weight_vn_to_on(rate_of_occurance, _ConnectedONs, NumberOfVNOccurances) -> 
+    1 / NumberOfVNOccurances.   % the actual weight is n_on_occurances / n_vn_occurances, 
+                                % but n_on_occurances is only known to the ON, 
+                                % so multiplication by this value is performed there, after receiving stimulation from the VN
 
 
 report_breaking_connection(none, _NewConnectedVN, _ExperimentStep, _GlobalCfg) -> ok;

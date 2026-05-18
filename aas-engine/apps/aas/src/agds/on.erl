@@ -1,6 +1,7 @@
 -module(on).
 -export([
     create_ON/4, 
+    increment_occurances/1, 
     connect_VN/3, 
     disconnect_VN/2, 
     remove_outdated_connections/3,
@@ -17,6 +18,7 @@
 
 -record(state, {
     self_index,             % int
+    n_occurances,           % int
     ong,                    % pid
     connected_vns,          % #{pid := {float | string, string}}
     last_excitation,        % float
@@ -30,6 +32,13 @@
 %% %%%%%%%%%%%%%%% API %%%%%%%%%%%%%%%
 
 create_ON(ONG, ONIndex, ExperimentStep, GlobalCfg) -> spawn(fun() -> init(ONG, ONIndex, ExperimentStep, GlobalCfg) end).
+
+
+increment_occurances(ON) -> 
+    ON ! {increment_occurances, self()},
+    receive
+        increment_occurances_finished -> ok
+    end.
 
 
 connect_VN(ON, VN, VNGName) -> 
@@ -91,6 +100,7 @@ init(ONG, ONIndex, ExperimentStep, #global_cfg{reporter=Reporter} = GlobalCfg) -
     report:node_creation(self(), on, ONIndex, ONG, ExperimentStep, Reporter),
     process_events(#state{
         self_index=ONIndex, 
+        n_occurances = 1, 
         ong=ONG, 
         connected_vns=#{}, 
         last_excitation=0.0, 
@@ -103,6 +113,7 @@ init(ONG, ONIndex, ExperimentStep, #global_cfg{reporter=Reporter} = GlobalCfg) -
 
 process_events(#state{
     self_index=ONIndex, 
+    n_occurances=NOccurances, 
     ong=ONG, 
     connected_vns=ConnectedVNs, 
     last_excitation=LastExcitation, 
@@ -119,14 +130,13 @@ process_events(#state{
             Stimulus, 
             CurrDepth,
             #stim_spec{
-                id=StimulationId, 
+                stimulation_id=StimulationId, 
                 experiment_step=ExperimentStep,
-                name=StimulationName,
-                write_to_log=WriteToLog,
-                node_group_modes=NodeGroupModes, 
-                min_passed_stimulus=_MinPassedStimulus, 
-                kind=StimulationKind,
-                params=StimulationParams
+                stimulation_name=StimulationName,
+                should_write_to_log=WriteToLog,
+                stimulation_kind=StimulationKind,
+                node_group_modes=NodeGroupModes,
+                poisoning_params=StimulationParams
             }=StimulationSpec
         } ->
             NewDepth = CurrDepth + 1,
@@ -141,9 +151,9 @@ process_events(#state{
                     process_events(State);
 
                 CurrONGMode ->
-                    EffectiveStimulus = get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, StimulationSpec),
+                    EffectiveStimulus = get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, NOccurances, StimulationSpec),
                     NewExcitation = CurrExcitation + EffectiveStimulus,
-
+ 
                     % io:format("[Step ~p | ~p] ON ~p: Received stimulus ~p from ~p at depth ~p. Effective stimulus: ~p. New excitation: ~p~n", [ExperimentStep, StimulationName, ONIndex, Stimulus, Source, CurrDepth, EffectiveStimulus, NewExcitation]),
 
                     report:node_stimulated(WriteToLog, self(), Source, NewExcitation, EffectiveStimulus, ExperimentStep, StimulationName, CurrDepth, Reporter),
@@ -227,6 +237,11 @@ process_events(#state{
             process_events(State#state{stimulated_neighs=NewStimulatedNeighs});
 
 
+        {increment_occurances, Asker} ->
+            Asker ! increment_occurances_finished,
+            process_events(State#state{n_occurances=NOccurances + 1});
+
+
         {connect, Asker, VN, VNGName} ->
             % Disconnect any prevoiously connected VN from the same VNG
             % ExistingVNsForVNG = [ExistingVN || {ExistingVN, {_ExistingReprValue, ExistingVNGName}} <- maps:to_list(ConnectedVNs), ExistingVNGName =:= VNGName],
@@ -242,7 +257,7 @@ process_events(#state{
             process_events(State#state{connected_vns=maps:remove(VN, ConnectedVNs)});
 
 
-        {remove_outdated_connections, AffectedVNGsAndCurrVNs, ExperimentStep, Sender} -> 
+        {remove_outdated_connections, AffectedVNGsAndCurrVNs, ExperimentStep, Asker} -> 
             NewConnectedVNs = maps:filter(
                 fun(VN, VNGName) -> 
                     case maps:get(VNGName, AffectedVNGsAndCurrVNs, none) of
@@ -257,7 +272,7 @@ process_events(#state{
             % io:format("ON ~p: Removing VNs ~p replaced by ~p~n", [ONIndex, lists:map(fun(VN) -> maps:get(VN, ConnectedVNs) end, RemovedVNs), AffectedVNGsAndCurrVNs]),
             lists:foreach(fun(VN) -> vn:disconnect_ON(VN, self(), ExperimentStep) end, RemovedVNs),
             
-            Sender ! removal_finished,
+            Asker ! removal_finished,
             process_events(State#state{connected_vns=NewConnectedVNs});
 
 
@@ -290,20 +305,40 @@ process_events(#state{
 weight_poisoning(PoisonLvl) -> PoisonLvl.
 
 
-get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, #stim_spec{kind=StimulationKind}=StimulationSpec) ->
-    AmplifiedStimulus = amplify_stimulus_with_responsive_vns(Stimulus, NewDepth, ConnectedVNs, StimulationSpec),
+get_effective_stimulus(Source, Stimulus, NewDepth, ConnectedVNs, AccPoisonLvls, NOccurances, 
+    #stim_spec{stimulation_kind=StimulationKind, vn_to_on_weight_mode=VNToONWeightMode}=StimulationSpec
+) ->
+    ReceivedStimulusWeighted = case should_apply_weight_vn_to_on(VNToONWeightMode, ConnectedVNs, Source) of
+        true -> apply_local_part_of_weight_vn_to_on(Stimulus, NOccurances);
+        false -> Stimulus
+    end,
+    AmplifiedStimulus = amplify_stimulus_with_responsive_vns(ReceivedStimulusWeighted, NewDepth, ConnectedVNs, StimulationSpec),
     PoisonLvl = case maps:get(Source, ConnectedVNs, undefined) of
         undefined -> 0.0;
         VNGName -> maps:get(VNGName, AccPoisonLvls, 0.0)
     end,
-    WeightedStimulus = case StimulationKind of
+    OutputStimulusWeighted = case StimulationKind of
         poisoning -> AmplifiedStimulus;
         _ -> AmplifiedStimulus - weight_poisoning(PoisonLvl)
     end,
-    if
-        WeightedStimulus < 0.0 -> 0.0;
-        true -> WeightedStimulus
+    if 
+        OutputStimulusWeighted < 0.0 -> 0.0;
+        true -> OutputStimulusWeighted
     end.
+
+
+apply_local_part_of_weight_vn_to_on(Stimulus, NOccurances) ->
+    Stimulus * NOccurances.
+
+
+should_apply_weight_vn_to_on(WeightMode, ConnectedVNs, Source) -> 
+    is_vn_to_on_weight_proportional_to_on_occurances(WeightMode) andalso is_vn(Source, ConnectedVNs).
+
+
+is_vn_to_on_weight_proportional_to_on_occurances(VNToONWeightMode) ->
+    VNToONWeightMode =:= rate_of_occurance.
+
+is_vn(Source, ConnectedVNs) -> maps:is_key(Source, ConnectedVNs).
 
 
 accumulate_poison(ONG, CurrAccPoisonLvls, LastExcitation, NewExcitation, EffectiveStimulus, Source, ConnectedVNs, ExperimentStep, Reporter, StimulationParams) ->
@@ -342,7 +377,7 @@ stimulate_vns(
     #stim_spec{
         node_group_modes=NodeGroupModes, 
         min_passed_stimulus=MinPassedStimulus, 
-        kind=StimulationKind
+        stimulation_kind=StimulationKind
     }=StimulationSpec
 ) ->
     StimulatedVNs = if

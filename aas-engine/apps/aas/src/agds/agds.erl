@@ -5,17 +5,34 @@
 -include("config.hrl").
 -include("stimulation.hrl").
 
--record(state, {
-    structure_id, 
-    vngs = #{}, 
-    ong, 
-    global_cfg, 
-    channel, 
-    last_stimulation_id=none, 
-    obs_count=0, 
-    is_profiling=false,
-    inference_time_native=0,
+-record(node_groups, {
+    vngs = #{},
+    ong
+}).
+
+-record(transient_state, {
+    last_stimulation_id=none
+}).
+
+-record(configuration, {
+    global_cfg
+}).
+
+-record(profiling_info, {
+    inference_time_native=0
+}).
+
+-record(logging_info, {
     log_file
+}).
+
+-record(state, {
+    structure_id,
+    node_groups = #node_groups{},
+    transient_state = #transient_state{},
+    configuration,
+    profiling_info = #profiling_info{},
+    logging_info
 }).
 
 
@@ -52,7 +69,16 @@ init(StructureId) ->
 
     {ok, LogFile} = file:open("aas_ctrl.log", [write]),
 
-    process_events(#state{structure_id = StructureIdAtom, ong = ong:create_ONG(self(), GlobalCfg), global_cfg = GlobalCfg, log_file=LogFile}).
+    ONG = ong:create_ONG(self(), GlobalCfg),
+
+    process_events(#state{
+        structure_id = StructureIdAtom,
+        node_groups = #node_groups{vngs = #{}, ong = ONG},
+        transient_state = #transient_state{last_stimulation_id = none},
+        configuration = #configuration{global_cfg = GlobalCfg},
+        profiling_info = #profiling_info{},
+        logging_info = #logging_info{log_file = LogFile}
+    }).
 
 
 %% %%%%%%%%%%%%%%% Main loop %%%%%%%%%%%%%%%
@@ -97,9 +123,9 @@ handle_message(Msg, State) ->
         % InitialStimuli: #{{vn, VNGName, Value} := Stimuli, {on, ONIndex} := Stimuli}
         % NodeGroupModes: #{VNGName => transitive | {responsive, excitation | value} | accumulative | passive}
         % MinPassedStimulus: float [0, 1]
-        {infere, ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus} ->
-            {NewState, ElapsedTimeNative} = measure(fun() -> infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, State) end),
-            NewStateTimed = NewState#state{inference_time_native = State#state.inference_time_native + ElapsedTimeNative},
+        {infere, ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, VNToVNWeightMode, VNToONWeightMode} ->
+            {NewState, ElapsedTimeNative} = measure(fun() -> infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, VNToVNWeightMode, VNToONWeightMode, State) end),
+            NewStateTimed = update_inference_time(NewState, ElapsedTimeNative),
             process_events(NewStateTimed);
 
         % InitianStimulation, NodeGroupModes, MinPassedStimulus: same as in infere
@@ -136,17 +162,18 @@ handle_message(Msg, State) ->
             process_events(NewState);
 
         get_inference_time_ms ->
-            file:write(State#state.log_file, io_lib:format("Sending inference time: ~p~n", [{inference_time_ms, erlang:convert_time_unit(State#state.inference_time_native, native, millisecond)}])),
-            pyrlang:send_client(State#state.structure_id, {inference_time_ms, erlang:convert_time_unit(State#state.inference_time_native, native, millisecond)}),
+            InferenceTimeMs = erlang:convert_time_unit(State#state.profiling_info#profiling_info.inference_time_native, native, millisecond),
+            file:write(State#state.logging_info#logging_info.log_file, io_lib:format("Sending inference time: ~p~n", [{inference_time_ms, InferenceTimeMs}])),
+            pyrlang:send_client(State#state.structure_id, {inference_time_ms, InferenceTimeMs}),
             process_events(State);
 
         reset_inference_time ->
-            NewState = State#state{inference_time_native=0},
+            NewState = State#state{profiling_info = State#state.profiling_info#profiling_info{inference_time_native = 0}},
             pyrlang:send_client(State#state.structure_id, inference_time_zeroed),
             process_events(NewState);
 
         stop ->
-            dbg_counter:print_report(State#state.global_cfg#global_cfg.dbg_counter),
+            dbg_counter:print_report(State#state.configuration#configuration.global_cfg#global_cfg.dbg_counter),
             stop_impl(State)
     end.
 
@@ -159,23 +186,34 @@ measure(Fun) ->
     {NewState, ElapsedTimeNative}.
 
 
-add_vng_impl(Name, categorical, #state{vngs = VNGs, global_cfg = GlobalCfg} = State) ->
-    State#state{vngs = VNGs#{Name => vng:create_categorical_VNG(Name, self(), GlobalCfg)}}.
+update_inference_time(#state{profiling_info = ProfilingInfo} = State, ElapsedTimeNative) ->
+    CurrInferenceTimeNative = ProfilingInfo#profiling_info.inference_time_native,
+    NewInferenceTimeNative = CurrInferenceTimeNative + ElapsedTimeNative,
 
-add_vng_impl(Name, numerical, Epsilon, MinValue, MaxValue, #state{vngs = VNGs, global_cfg = GlobalCfg} = State) ->
-    State#state{vngs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, MinValue, MaxValue, self(), GlobalCfg)}}.
+    NewProfilingInfo = ProfilingInfo#profiling_info{inference_time_native = NewInferenceTimeNative},
+    NewStateTimed = State#state{profiling_info = NewProfilingInfo},
+    NewStateTimed.
 
 
-add_observation_impl(ExperimentStep, Values, #state{vngs = VNGs, ong = ONG, obs_count = ObsCount} = State) ->
+add_vng_impl(Name, categorical, #state{node_groups = #node_groups{vngs = VNGs} = NodeGroups, configuration = #configuration{global_cfg = GlobalCfg}} = State) ->
+    NewVNGs = VNGs#{Name => vng:create_categorical_VNG(Name, self(), GlobalCfg)},
+    State#state{node_groups = NodeGroups#node_groups{vngs = NewVNGs}}.
+
+add_vng_impl(Name, numerical, Epsilon, MinValue, MaxValue, #state{node_groups = #node_groups{vngs = VNGs} = NodeGroups, configuration = #configuration{global_cfg = GlobalCfg}} = State) ->
+    NewVNGs = VNGs#{Name => vng:create_numerical_VNG(Name, Epsilon, MinValue, MaxValue, self(), GlobalCfg)},
+    State#state{node_groups = NodeGroups#node_groups{vngs = NewVNGs}}.
+
+
+add_observation_impl(ExperimentStep, Values, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
     {NewON, NewONIndex} = ong:new_ON(ExperimentStep, ONG),
     maps:foreach(fun(Name, Value) -> vng:add_value(ExperimentStep, maps:get(Name, VNGs), Value, NewON, NewONIndex) end, Values),
     maps:foreach(fun(Name, _Value) -> vng:wait_for_value_added(maps:get(Name, VNGs)) end, Values),
 
-    pyrlang:send_client(State#state.structure_id, {new_on_index, NewONIndex}),
-    State#state{obs_count = ObsCount + 1}.
+    pyrlang:send_client(StructureId, {new_on_index, NewONIndex}),
+    State.
 
 
-reconnect_on_impl(ExperimentStep, ONIndex, _ReconnectedVNValues, NewVNValues, #state{vngs = VNGs, ong = ONG} = State) ->
+reconnect_on_impl(ExperimentStep, ONIndex, _ReconnectedVNValues, NewVNValues, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
     ON = ong:get_ON(ONG, ONIndex),
 
     % maps:foreach(fun(VNGName, Value) ->
@@ -194,12 +232,22 @@ reconnect_on_impl(ExperimentStep, ONIndex, _ReconnectedVNValues, NewVNValues, #s
 
     on:remove_outdated_connections(ON, NewVNs, ExperimentStep),
 
-    pyrlang:send_client(State#state.structure_id, on_reconnected),
+    pyrlang:send_client(StructureId, on_reconnected),
     State.
 
 
-infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, #state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
-    report:node_group_modes(WriteToLog, NodeGroupModes, ExperimentStep, StimulationName, State#state.global_cfg#global_cfg.reporter),
+infere_impl(
+    ExperimentStep, 
+    StimulationName, 
+    WriteToLog, 
+    InitialStimuli, 
+    NodeGroupModes, 
+    MinPassedStimulus, 
+    VNToVNWeightMode, 
+    VNToONWeightMode, 
+    #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}, configuration = #configuration{global_cfg = GlobalCfg}} = State
+) ->
+    report:node_group_modes(WriteToLog, NodeGroupModes, ExperimentStep, StimulationName, GlobalCfg#global_cfg.reporter),
 
     StimulationId = erlang:unique_integer(),
     StimulationSpec = #stim_spec{
@@ -210,18 +258,20 @@ infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGro
         stimulation_kind=inference, 
         node_group_modes=NodeGroupModes, 
         min_passed_stimulus=MinPassedStimulus, 
-        poisoning_params=#{}
+        poisoning_params=#{}, 
+        vn_to_vn_weight_mode=VNToVNWeightMode,
+        vn_to_on_weight_mode=VNToONWeightMode
     },
 
-    dbg_counter:add_inference(initial_stimulation_type(InitialStimuli), StimulationId, State#state.global_cfg#global_cfg.dbg_counter),
+    dbg_counter:add_inference(initial_stimulation_type(InitialStimuli), StimulationId, GlobalCfg#global_cfg.dbg_counter),
     stimulate(InitialStimuli, StimulationSpec, VNGs, ONG),
     
     pyrlang:send_client(StructureId, inference_finished),
-    State#state{last_stimulation_id=StimulationId}.
+    State#state{transient_state = #transient_state{last_stimulation_id = StimulationId}}.
     
 
-poison_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, DeadlyDose, MinimumAccumulatedDose, #state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
-    report:node_group_modes(WriteToLog, NodeGroupModes, ExperimentStep, StimulationName, State#state.global_cfg#global_cfg.reporter),
+poison_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, DeadlyDose, MinimumAccumulatedDose, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}, configuration = #configuration{global_cfg = GlobalCfg}} = State) ->
+    report:node_group_modes(WriteToLog, NodeGroupModes, ExperimentStep, StimulationName, GlobalCfg#global_cfg.reporter),
 
     StimulationId = erlang:unique_integer(),
     StimulationSpec = #stim_spec{
@@ -238,14 +288,14 @@ poison_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGro
         }
     },
 
-    dbg_counter:add_inference(poison, StimulationId, State#state.global_cfg#global_cfg.dbg_counter),
+    dbg_counter:add_inference(poison, StimulationId, GlobalCfg#global_cfg.dbg_counter),
     stimulate(InitialStimuli, StimulationSpec, VNGs, ONG),
 
     pyrlang:send_client(StructureId, poisoning_finished),
-    State#state{last_stimulation_id=StimulationId}.
+    State#state{transient_state = #transient_state{last_stimulation_id = StimulationId}}.
 
 
-get_excitation_impl(vng, VNGName, #state{structure_id = StructureId, vngs = VNGs, last_stimulation_id=LastStimulationId} = State) ->
+get_excitation_impl(vng, VNGName, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs}, transient_state = #transient_state{last_stimulation_id = LastStimulationId}} = State) ->
     % other calls to maps:get(VNGName, VNGs) could be protected the same way
     case maps:get(VNGName, VNGs, non_existing_vng) of
         non_existing_vng -> pyrlang:send_client(StructureId, {excitation_for_vng, non_existing_vng});
@@ -256,13 +306,13 @@ get_excitation_impl(vng, VNGName, #state{structure_id = StructureId, vngs = VNGs
     State.
     
 
-get_excitation_impl(ong, #state{structure_id = StructureId, ong = ONG, last_stimulation_id=LastStimulationId} = State) ->
+get_excitation_impl(ong, #state{structure_id = StructureId, node_groups = #node_groups{ong = ONG}, transient_state = #transient_state{last_stimulation_id = LastStimulationId}} = State) ->
     ONsExcitation = ong:get_excitation(ONG, LastStimulationId),
     pyrlang:send_client(StructureId, {excitations, ONsExcitation}),
     State.
     
 
-get_neighbours_impl(vn, VNGName, Value, #state{structure_id = StructureId, vngs = VNGs} = State) ->
+get_neighbours_impl(vn, VNGName, Value, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs}} = State) ->
     case maps:get(VNGName, VNGs, non_existing_vng) of
         non_existing_vng -> pyrlang:send_client(StructureId, {neighbours, non_existing_vng});
         VNG -> 
@@ -272,13 +322,13 @@ get_neighbours_impl(vn, VNGName, Value, #state{structure_id = StructureId, vngs 
     State.
     
 
-get_neighbours_impl(on, ONIndex, #state{structure_id = StructureId, ong = ONG} = State) ->
+get_neighbours_impl(on, ONIndex, #state{structure_id = StructureId, node_groups = #node_groups{ong = ONG}} = State) ->
     Neighs = ong:get_neighbours(ONG, ONIndex),
     pyrlang:send_client(StructureId, {neighbours, Neighs}),
     State.
 
 
-dbg_get_vns_impl(VNGName, Caller, #state{vngs = VNGs} = State) ->
+dbg_get_vns_impl(VNGName, Caller, #state{node_groups = #node_groups{vngs = VNGs}} = State) ->
     case maps:get(VNGName, VNGs, non_existing_vng) of
         non_existing_vng -> Caller ! {vns_for_vng, non_existing_vng};
         VNG -> 
@@ -288,7 +338,7 @@ dbg_get_vns_impl(VNGName, Caller, #state{vngs = VNGs} = State) ->
     State.
 
 
-dbg_get_ons_impl(Caller, #state{ong = ONG} = State) ->
+dbg_get_ons_impl(Caller, #state{node_groups = #node_groups{ong = ONG}} = State) ->
     ONIndices = ong:get_all_ON_indices(ONG),
     ONInfo = lists:map(fun(ONIndex) -> 
         ON = ong:get_ON(ONG, ONIndex),
@@ -299,15 +349,15 @@ dbg_get_ons_impl(Caller, #state{ong = ONG} = State) ->
     State.
 
 
-get_structure_size_impl(#state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
+get_structure_size_impl(#state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}, logging_info = #logging_info{log_file = LogFile}} = State) ->
     VNGsSize = maps:fold(fun(_Name, VNG, Acc) -> Acc + vng:get_number_of_nodes(VNG) end, 0, VNGs),
     ONGSize = ong:get_number_of_nodes(ONG),
-    file:write(State#state.log_file, io_lib:format("Sending structure size: ~p~n", [VNGsSize + ONGSize])),
+    file:write(LogFile, io_lib:format("Sending structure size: ~p~n", [VNGsSize + ONGSize])),
     pyrlang:send_client(StructureId, {structure_size, VNGsSize + ONGSize}),
     State.
     
 
-get_on_for_exact_vn_values(VNValues, #state{structure_id = StructureId, vngs = VNGs, ong = ONG} = State) ->
+get_on_for_exact_vn_values(VNValues, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
     AllONIndices = ong:get_all_ON_indices(ONG),
     ONs = maps:fold(fun(VNGName, Value, Acc) -> 
         case sets:is_empty(Acc) of
@@ -382,7 +432,7 @@ stimulate(InitialStimuli, #stim_spec{node_group_modes=NodeGroupModes} = Stimulat
     stimulate_node_groups(NonResponsiveNGStim, VNGs, ONG, StimulationSpec).
 
 
-delete_impl(#state{vngs = VNGs, ong = ONG, global_cfg = #global_cfg{reporter = Reporter}}) ->
+delete_impl(#state{node_groups = #node_groups{vngs = VNGs, ong = ONG}, configuration = #configuration{global_cfg = #global_cfg{reporter = Reporter}}}) ->
     maps:foreach(fun(_Name, VNG) -> vng:delete(VNG) end, VNGs),
     ong:delete(ONG),
     report:stop(Reporter),
