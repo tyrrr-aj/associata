@@ -1,5 +1,6 @@
 -module(vng).
 -export([create_numerical_VNG/6, create_categorical_VNG/3, add_value/5, wait_for_value_added/1, reconnect_vn_to_on/5,
+        ensure_vn/3, wait_for_vn_ensured/1, connect_vn_to_on/5, wait_for_vn_connected_to_on/1,
         stimulate/3, get_excitation/2, get_vn/2, get_all_vns/1, get_neighbours/2, get_number_of_nodes/1, delete/1]).
 -export([remove_killed_vn/3, notify_VNG_to_ON_conn_count_incremented/1, notify_VNG_to_ON_conn_count_decremented/1]).
 -export([reset_after_deadlock/1]).
@@ -32,6 +33,16 @@ create_categorical_VNG(VNGName, AGDS, GlobalCfg) -> spawn(fun() -> init(categori
 add_value(ExperimentStep, VNG, AddedValue, RespectiveON, RespectiveONIndex) -> VNG ! {add_value, AddedValue, RespectiveON, RespectiveONIndex, ExperimentStep}.
 
 wait_for_value_added(VNG) -> receive {value_added, VNG, VN} -> {ok, VN} end.
+
+
+ensure_vn(VNG, Value, ExperimentStep) -> VNG ! {ensure_vn, Value, ExperimentStep}.
+
+wait_for_vn_ensured(VNG) -> receive {vn_ensured, VNG, VN, IsNew} -> {VN, IsNew} end.
+
+
+connect_vn_to_on(VNG, Value, ON, ONIndex, ExperimentStep) -> VNG ! {connect_vn_to_on, Value, ON, ONIndex, ExperimentStep}.
+
+wait_for_vn_connected_to_on(VNG) -> receive {vn_connected_to_on, VNG} -> ok end.
 
 
 reconnect_vn_to_on(VNG, VNValue, NewON, NewONIndex, ExperimentStep) ->
@@ -156,22 +167,31 @@ process_events(#state{
 } = State) ->
 
     receive
-        {add_value, AddedValue, RespectiveON, RespectiveONIndex, ExperimentStep} ->
+
+        {ensure_vn, AddedValue, ExperimentStep} ->
             AddedValueBounded = bounded_value(AddedValue, VNGType, MinValue, MaxValue),
 
             case VNGType of
                 categorical -> 
                     case maps:find(AddedValueBounded, VNs) of
-                        {ok, VN} -> NewVNs = VNs;
+                        {ok, VN} -> 
+                            NewVNs = VNs,
+                            IsNew = existing;
                         error -> 
                             VN = vn:create_VN(categorical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, MinValue, MaxValue, ExperimentStep, GlobalCfg),
-                            NewVNs = VNs#{AddedValueBounded => VN}
+                            NewVNs = VNs#{AddedValueBounded => VN},
+                            IsNew = new
                     end;
                 
                 numerical -> 
-                    {NewVNs, {IsNew, VN}} = avb_tree:add(VNs, AddedValueBounded, fun() -> vn:create_VN(numerical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, MinValue, MaxValue, ExperimentStep, GlobalCfg) end),
+                    {NewVNs, {IsNewRaw, VN}} = avb_tree:add(VNs, AddedValueBounded, fun() -> vn:create_VN(numerical, AddedValueBounded, self(), VNGName, VNGtoONConnCount, MinValue, MaxValue, ExperimentStep, GlobalCfg) end),
                         
-                    case IsNew of
+                    IsNew = case IsNewRaw of
+                        new_value -> new;
+                        existing_value -> existing
+                    end,
+
+                    case IsNewRaw of
                         new_value ->
                             Neighs = avb_tree:get_neighbours(NewVNs, AddedValueBounded),
 
@@ -191,25 +211,26 @@ process_events(#state{
                     end
             end,
 
-            case vn:is_connected_to_on(VN, RespectiveON) of
-                true -> 
-                    % io:format("VNG ~p: VN ~p already connected to ON ~p, skipping connection.~n", [VNGName, AddedValueBounded, RespectiveONIndex]),
+            NewAllVNsSet = sets:add_element(VN, AllVNsSet),
+            AGDS ! {vn_ensured, self(), VN, IsNew},
+            process_events(State#state{vns=NewVNs, all_vns_set=NewAllVNsSet});
+
+
+        {connect_vn_to_on, Value, ON, ONIndex, ExperimentStep} ->
+            VN = get_vn_for_value(Value, State),
+
+            case vn:connect_ON(VN, ON, ONIndex) of
+                already_connected -> 
                     NewVNGtoONConnCount = VNGtoONConnCount;
-                false ->
-                    % io:format("VNG ~p: Connecting VN ~p to ON ~p.~n", [VNGName, AddedValueBounded, RespectiveONIndex]),
-                    vn:connect_ON(VN, RespectiveON, RespectiveONIndex),
-                    on:connect_VN(RespectiveON, VN, VNGName),
-                    report:connection_formed(VN, RespectiveON, ExperimentStep, Reporter),
+                ok -> 
+                    on:connect_VN(ON, VN, VNGName),
+                    report:connection_formed(VN, ON, ExperimentStep, Reporter),
                     NewVNGtoONConnCount = VNGtoONConnCount + 1
             end,
 
-            NewAllVNsSet = sets:add_element(VN, AllVNsSet),
-
-            update_VNG_to_ON_conn_count(NewAllVNsSet, NewVNGtoONConnCount),
-
-            AGDS ! {value_added, self(), VN},
-
-            process_events(State#state{vns=NewVNs, all_vns_set=NewAllVNsSet, vng_to_on_conn_count=NewVNGtoONConnCount});
+            update_VNG_to_ON_conn_count(AllVNsSet, NewVNGtoONConnCount),
+            AGDS ! {vn_connected_to_on, self()},
+            process_events(State#state{vng_to_on_conn_count=NewVNGtoONConnCount});
 
 
         {stimulate, Stimuli, #stim_spec{node_group_modes=NodeGroupModes}=StimulationSpec} ->
@@ -424,6 +445,18 @@ get_nearby_VN_stimulus(ExactValue, _VNReprValue, MinVNGValue, MaxVNGValue, Stimu
 
 get_nearby_VN_stimulus(ExactValue, VNReprValue, MinVNGValue, MaxVNGValue, Stimulus) -> 
     Stimulus - (1 - abs(ExactValue - VNReprValue) / vng_range(MinVNGValue, MaxVNGValue)).
+
+
+get_vn_for_value(Value, #state{vng_type = VNGType, min_value = MinValue, max_value = MaxValue, vns = VNs}) ->
+    ValueBounded = bounded_value(Value, VNGType, MinValue, MaxValue),
+    case VNGType of
+        categorical -> maps:get(ValueBounded, VNs);
+        numerical -> 
+            case avb_tree:get(VNs, ValueBounded) of
+                {Pid, _Occurances} -> Pid;
+                none -> none
+            end
+    end.
 
 
 bounded_value(Value, categorical, _MinValue, _MaxValue) -> Value;
