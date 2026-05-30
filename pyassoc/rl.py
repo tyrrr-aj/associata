@@ -271,7 +271,12 @@ class TD_AGDS(TD):
         poison_min_acc_dose=0.0,
         value_epsilon=0.01,
         min_value=0.0,
-        max_value=1.0
+        max_value=1.0,
+        new_observations_treatment='replace', # 'replace' | 'add_and_count'
+        value_selection_mode='closest_on', # 'closest_on' | 'closest_vn' | 'direct_on' | 'direct_or_closest_on'
+        action_selection_mode='direct_on', # 'direct_on' | 'inference'
+        vn_to_vn_weight_mode='classical_subtractive', # 'constant' | 'classical_multiplicative' | 'classical_subtractive'
+        vn_to_on_weight_mode='constant' # 'constant' | 'one_over_n_on' | 'rate_of_occurance'
     ):
         self.structure_size_history = []
         self._save_stimulations_in_step = save_stimulations_in_step
@@ -289,6 +294,11 @@ class TD_AGDS(TD):
         self.value_epsilon = value_epsilon
         self.min_value = min_value
         self.max_value = max_value
+        self.new_observations_treatment = new_observations_treatment
+        self.value_selection_mode = value_selection_mode
+        self.action_selection_mode = action_selection_mode
+        self.vn_to_vn_weight_mode = vn_to_vn_weight_mode
+        self.vn_to_on_weight_mode = vn_to_on_weight_mode
 
         super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedy_epsilon=greedy_epsilon, state_space_feature_names=state_space_feature_names)
 
@@ -329,45 +339,53 @@ class TD_AGDS(TD):
             # exploiting action
             self._exploratory_action_history.append(0)
 
-            ons = await self.q.get_on_for_exact_vn_values(
-                {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())}
-            )
-
-            match ons:
-                case None:
-                    return self._get_random_action()
-                case (on1, on2):
-                    on1_neighs = await self.q.get_on_neighbours(on1)
-                    on2_neighs = await self.q.get_on_neighbours(on2)
-
-                    on1_value = np.array([float(ef[2]) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'value'])
-                    on2_value = np.array([float(ef[2]) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'value'])
-
-                    if on1_value > on2_value:
-                        return np.array([int(float(ef[2])) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'action'])
-                    else:
-                        return np.array([int(float(ef[2])) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'action'])
-                    
-                case on:
-                    neighs = await self.q.get_on_neighbours(on)
-                    return np.array([int(float(ef[2])) for ef in neighs if ef[0] == 'vn' and ef[1] == 'action'])
-
+            if self.action_selection_mode == 'direct_on':
+                return await self._pick_action_through_direct_on(state)
+            elif self.action_selection_mode == 'inference':
+                return await self._pick_action_through_inference(state)
+            else:
+                raise ValueError(f"Unknown action_selection_mode: {self.action_selection_mode}")
             
-            # best_sa = await self._search_for_best_action(state, 'pick_action')
 
-            # if best_sa is None:
-            #     return self._get_random_action()
+    async def _pick_action_through_direct_on(self, state):
+        ons = await self.q.get_on_for_exact_vn_values(
+            {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())}
+        )
 
-            # # TODO: handles only one-dimensional action space
-            # best_sa_neigh_nodes = await self.q.get_on_neighbours(int(best_sa))
-            # # print(f'Best sa neigh nodes: {best_sa_neigh_nodes}')
+        match ons:
+            case None:
+                return self._get_random_action()
+            case (on1, on2):
+                on1_neighs = await self.q.get_on_neighbours(on1)
+                on2_neighs = await self.q.get_on_neighbours(on2)
 
-            # if best_sa_neigh_nodes == []:
-            #     return self._get_random_action()
-            
-            # return np.array([int(float(ef[2])) for ef in best_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'action'])
-        
-        
+                on1_value = np.array([float(ef[2]) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'value'])
+                on2_value = np.array([float(ef[2]) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'value'])
+
+                if on1_value > on2_value:
+                    return np.array([int(float(ef[2])) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'action'])
+                else:
+                    return np.array([int(float(ef[2])) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'action'])
+                
+            case on:
+                neighs = await self.q.get_on_neighbours(on)
+                return np.array([int(float(ef[2])) for ef in neighs if ef[0] == 'vn' and ef[1] == 'action'])
+
+
+    async def _pick_action_through_inference(self, state):
+        best_sa = await self._search_for_best_action(state, 'pick_action')
+
+        if best_sa is None:
+            return self._get_random_action()
+
+        # TODO: handles only one-dimensional action space
+        best_sa_neigh_nodes = await self.q.get_on_neighbours(int(best_sa))
+
+        if best_sa_neigh_nodes == []:
+            return self._get_random_action()
+
+        return np.array([int(float(ef[2])) for ef in best_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'action'])
+
 
     async def _init_q(self):
         self.q = await associata.create_agds(save_stimulations_in_step=self._save_stimulations_in_step)
@@ -385,39 +403,50 @@ class TD_AGDS(TD):
 
 
     async def _set_known_q_value(self, state, action, value):
-        # state_on = await self.q.get_on_for_exact_vn_values(
-        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
-        #     {'action': float(action[0])}    # TODO: handles only one-dimensional action space
-        # )
-        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
-        # print(f"Setting known Q-value for state={state_on}, action={action} to value={value}")
-        # print("\n")
-
         await self._store_observation(state, action, value)
 
 
     async def _store_observation(self, state, action, value):
         # handles only float values for VNGs
-        state_repr = {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
+        state_repr = self._get_state_representation(state)
+        action_repr = self._get_action_representation(action)
+        value_repr = self._get_value_representation(value)
+
+        if self.new_observations_treatment == 'replace':
+            await self._store_observation_replacing(state_repr, action_repr, value_repr)
+        elif self.new_observations_treatment == 'add_and_count':
+            await self._store_observation_counting(state_repr, action_repr, value_repr)
+
+
+    def _get_state_representation(self, state):
+        return {str(vng_name): float(vng_value) for vng_name, vng_value in zip(
                                     list(self._state_space_feature_names), 
                                     state.tolist()
                                 )}
-        action_repr = { 'action': float(action[0]) }   # TODO: handles only one-dimensional action space
-        value_repr = { 'value': float(value) }
+    
 
-        new_observation = state_repr | action_repr | value_repr
+    def _get_action_representation(self, action):
+        return { 'action': float(action[0]) }   # TODO: handles only one-dimensional action space
+    
+
+    def _get_value_representation(self, value):
+        return { 'value': float(value) }
+
+
+    async def _store_observation_replacing(self, state_repr, action_repr, value_repr):
         on_for_state_action = await self.q.get_on_for_exact_vn_values(state_repr | action_repr)
 
         if on_for_state_action is None:
-            new_on_index = await self.q.add_observation(new_observation, self._step_nr)
-            # await self._poison(new_on_index, self._last_action)
+            await self.q.add_observation(state_repr | action_repr | value_repr, self._step_nr)
         else:
             await self.q.reconnect_on(on_for_state_action, state_repr | action_repr, value_repr, self._step_nr)
 
 
-    async def _get_assoc_action_value(self, state, action, stimulation_name):
-        # DIRECT VNG "Value" SEARCH
+    async def _store_observation_counting(self, state_repr, action_repr, value_repr):
+        await self.q.add_observation(state_repr | action_repr | value_repr, self._step_nr)
 
+
+    async def _get_action_value_through_closest_vn(self, state, action, stimulation_name):
         sa_value_search = self._setup_search_from_state(
             state,
             ong_mode=associata.NodeGroupMode.transitive,
@@ -425,13 +454,6 @@ class TD_AGDS(TD):
             value_mode=associata.NodeGroupMode.accumulative
         )
         sa_value_search = self._add_search_from_action(action, sa_value_search)
-        # sa_value = await self._infere_and_get_max_from_vng(
-        #     'value',
-        #     sa_value_search,
-        #     self.min_passed_stimulus_vng,
-        #     self.min_vn_excitation,
-        #     stimulation_name
-        # )
 
         sa_value = await self._infere_and_get_weighted_avg_from_vng(
             'value',
@@ -441,59 +463,67 @@ class TD_AGDS(TD):
             stimulation_name
         )
         
-        return float(sa_value) if sa_value is not None else 0.0
+        return float(sa_value) if sa_value is not None else None
+
+        
+    async def _get_action_value_through_direct_on(self, state, action, stimulation_name):
+        sa = await self.q.get_on_for_exact_vn_values(
+            {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
+            {'action': float(action[0])}    # TODO: handles only one-dimensional action space
+        )
+
+        if sa is None:
+            return None
+        else:
+            sa_value_neigh_nodes = await self.q.get_on_neighbours(sa)
+            sa_value = [float(ef[2]) for ef in sa_value_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
+            return float(sa_value)
 
 
-        # CLOSEST ON -> VN "Value" SEARCH
+    async def _get_action_value_through_closest_on(self, state, action, stimulation_name):
+        sa_value_search = self._setup_search_from_state(
+            state,
+            ong_mode=associata.NodeGroupMode.accumulative,
+            action_mode=associata.NodeGroupMode.responsive_exciation,
+            value_mode=associata.NodeGroupMode.passive
+        )
+        sa_value_search = self._add_search_from_action(action, sa_value_search)
 
-        # sa_value_search = self._setup_search_from_state(
-        #     state,
-        #     ong_mode=associata.NodeGroupMode.accumulative,
-        #     action_mode=associata.NodeGroupMode.responsive_exciation,
-        #     value_mode=associata.NodeGroupMode.passive
-        # )
-        # sa_value_search = self._add_search_from_action(action, sa_value_search)
-
-        # closest_sa = await self._infere_and_get_max_from_ong(
-        #     sa_value_search,
-        #     self.min_passed_stimulus_ong,
-        #     self.min_on_excitation,
-        #     stimulation_name
-        # )
+        closest_sa = await self._infere_and_get_max_from_ong(
+            sa_value_search,
+            self.min_passed_stimulus_ong,
+            self.min_on_excitation,
+            stimulation_name
+        )
 
         # print (f'get_assoc_action_value: closest ON for state={state}, action={action} is {closest_sa}')
 
-        # if closest_sa is None:
-        #     return 0.0
-        # else:
-        #     closest_sa_neigh_nodes = await self.q.get_on_neighbours(closest_sa)
-        #     sa_value = [float(ef[2]) for ef in closest_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
-        #     return float(sa_value)
+        if closest_sa is None:
+            return None
+        else:
+            closest_sa_neigh_nodes = await self.q.get_on_neighbours(closest_sa)
+            sa_value = [float(ef[2]) for ef in closest_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
+            return float(sa_value)
 
 
     async def _search_for_action_value(self, state, action, stimulation_name):
-        # sa = await self.q.get_on_for_exact_vn_values(
-        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
-        #     {'action': float(action[0])}    # TODO: handles only one-dimensional action space
-        # )
-        
-        # direct_value = None
-        assoc_value = await self._get_assoc_action_value(state, action, stimulation_name)
+        if self.value_selection_mode == 'closest_on':
+            action_value = await self._get_action_value_through_closest_on(state, action, stimulation_name)
 
-        # if sa is None:
-        #     # # return 0.0
-        #     # assoc_value = await self._get_assoc_action_value(state, action, stimulation_name)
-        #     pass
-        # else:
-        #     sa_value_neigh_nodes = await self.q.get_on_neighbours(sa)
-        #     sa_value = [float(ef[2]) for ef in sa_value_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
-        #     direct_value = float(sa_value)
+        elif self.value_selection_mode == 'closest_vn':
+            action_value = await self._get_action_value_through_closest_vn(state, action, stimulation_name)
 
-        # if direct_value is not None and direct_value != assoc_value:
-        #     print(f'DISCREPENCY at step {self._step_nr} for state={state}, action={action}:')
-        #     print("Direct value: " + (f"{direct_value:.4f}" if direct_value is not None else "None") + f" (ON: {sa}), Associated value: {assoc_value:.4f}")
-
-        return assoc_value
+        elif self.value_selection_mode == 'direct_on':
+            action_value = await self._get_action_value_through_direct_on(state, action, stimulation_name)
+            
+        elif self.value_selection_mode == 'direct_or_closest_on':
+            direct_value = await self._get_action_value_through_direct_on(state, action, stimulation_name)
+            if direct_value is not None:
+                action_value = direct_value
+            else:
+                action_value = await self._get_action_value_through_closest_on(state, action, stimulation_name)
+            
+        return action_value if action_value is not None else 0.0
 
 
     async def _search_for_best_action(self, state, stimulation_name):
@@ -533,15 +563,7 @@ class TD_AGDS(TD):
 
 
     def _setup_search_from_state(self, state, ong_mode, action_mode, value_mode):
-        node_group_modes = {
-            'ong': ong_mode,
-            'value': value_mode,
-            'action': action_mode,
-        } | {
-            str(feature_name): associata.NodeGroupMode.transitive for feature_name in self._state_space_feature_names
-        }
-        
-        search = associata.StimulationSetup(node_group_modes)
+        search = self._setup_search(ong_mode, action_mode, value_mode, state_mode=associata.NodeGroupMode.transitive)
         
         for f_name, f_value in zip(self._state_space_feature_names, state):
             search.stimulate_vn(str(f_name), f_value)
@@ -550,6 +572,12 @@ class TD_AGDS(TD):
     
 
     def _setup_search_from_on(self, on_node, ong_mode, action_mode, value_mode, state_mode):
+        search = self._setup_search(ong_mode, action_mode, value_mode, state_mode)        
+        search.stimulate_on(on_node)
+        return search
+    
+
+    def _setup_search(self, ong_mode, action_mode, value_mode, state_mode):
         node_group_modes = {
             'ong': ong_mode,
             'value': value_mode,
@@ -558,12 +586,8 @@ class TD_AGDS(TD):
             str(feature_name): state_mode for feature_name in self._state_space_feature_names
         }
 
-        search = associata.StimulationSetup(node_group_modes)
-        
-        search.stimulate_on(on_node)
-
+        search = associata.StimulationSetup(node_group_modes, self.vn_to_vn_weight_mode, self.vn_to_on_weight_mode)
         return search
-    
 
     def _add_search_from_action(self, action, search):
         search.stimulate_vn('action', action[0])    # TODO: handles only one-dimensional action space

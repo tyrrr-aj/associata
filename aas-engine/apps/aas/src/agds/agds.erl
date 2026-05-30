@@ -123,6 +123,7 @@ handle_message(Msg, State) ->
         % InitialStimuli: #{{vn, VNGName, Value} := Stimuli, {on, ONIndex} := Stimuli}
         % NodeGroupModes: #{VNGName => transitive | {responsive, excitation | value} | accumulative | passive}
         % MinPassedStimulus: float [0, 1]
+        % VNToVNWeightMode, VNToONWeightMode: replacing | proportional
         {infere, ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, VNToVNWeightMode, VNToONWeightMode} ->
             {NewState, ElapsedTimeNative} = measure(fun() -> infere_impl(ExperimentStep, StimulationName, WriteToLog, InitialStimuli, NodeGroupModes, MinPassedStimulus, VNToVNWeightMode, VNToONWeightMode, State) end),
             NewStateTimed = update_inference_time(NewState, ElapsedTimeNative),
@@ -205,12 +206,74 @@ add_vng_impl(Name, numerical, Epsilon, MinValue, MaxValue, #state{node_groups = 
 
 
 add_observation_impl(ExperimentStep, Values, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
-    {NewON, NewONIndex} = ong:new_ON(ExperimentStep, ONG),
-    maps:foreach(fun(Name, Value) -> vng:add_value(ExperimentStep, maps:get(Name, VNGs), Value, NewON, NewONIndex) end, Values),
-    maps:foreach(fun(Name, _Value) -> vng:wait_for_value_added(maps:get(Name, VNGs)) end, Values),
+    VNResults = ensure_vns_exist(Values, VNGs, ExperimentStep),
+    AllExisting = check_if_all_vns_already_existed(VNResults),
 
-    pyrlang:send_client(StructureId, {new_on_index, NewONIndex}),
+    ONIndex = case AllExisting of
+        true ->
+            CommonONIndex = find_common_on_index(VNResults),
+            case CommonONIndex of
+                none -> 
+                    NewONIndex = create_on_connected_to_vns(Values, VNGs, ExperimentStep, ONG),
+                    NewONIndex;
+                FoundONIndex ->
+                    increment_on_occurances(FoundONIndex, ONG),
+                    FoundONIndex
+            end;
+        false -> 
+            NewONIndex = create_on_connected_to_vns(Values, VNGs, ExperimentStep, ONG),
+            NewONIndex
+    end,
+
+    pyrlang:send_client(StructureId, {new_on_index, ONIndex}),
     State.
+
+
+ensure_vns_exist(Values, VNGs, ExperimentStep) ->
+    maps:foreach(fun(Name, Value) -> vng:ensure_vn(maps:get(Name, VNGs), Value, ExperimentStep) end, Values),
+    maps:map(fun(Name, _Value) -> vng:wait_for_vn_ensured(maps:get(Name, VNGs)) end, Values).
+
+
+check_if_all_vns_already_existed(VNResults) ->
+    maps_util:all(fun(_Name, {_VN, IsNew}) -> IsNew =:= existing end, VNResults).
+
+
+increment_on_occurances(ONIndex, ONG) ->
+    ON = ong:get_ON(ONG, ONIndex),
+    on:increment_occurances(ON).
+
+
+create_on_connected_to_vns(VNValues, VNGs, ExperimentStep, ONG) ->
+    {NewON, NewONIndex} = ong:new_ON(ExperimentStep, ONG),
+    connect_all_vns_to_on(VNValues, VNGs, NewON, NewONIndex, ExperimentStep),
+    NewONIndex.
+
+
+find_common_on_index(VNResults) ->
+    VNList = [VN || {VN, _IsNew} <- maps:values(VNResults)],
+    case VNList of
+        [] -> none;
+        [FirstVN | RestVNs] ->
+            FirstONIndices = sets:from_list(vn:get_neigh_on_indices(FirstVN)),
+            CommonONIndices = lists:foldl(fun(VN, Acc) ->
+                case sets:is_empty(Acc) of
+                    true -> Acc;
+                    false ->
+                        ONIndices = sets:from_list(vn:get_neigh_on_indices(VN)),
+                        sets:intersection(Acc, ONIndices)
+                end
+            end, FirstONIndices, RestVNs),
+
+            case sets:size(CommonONIndices) of
+                0 -> none;
+                1 -> hd(sets:to_list(CommonONIndices)) 
+            end
+    end.
+
+
+connect_all_vns_to_on(Values, VNGs, ON, ONIndex, ExperimentStep) ->
+    maps:foreach(fun(Name, Value) -> vng:connect_vn_to_on(maps:get(Name, VNGs), Value, ON, ONIndex, ExperimentStep) end, Values),
+    maps:foreach(fun(Name, _Value) -> vng:wait_for_vn_connected_to_on(maps:get(Name, VNGs)) end, Values).
 
 
 reconnect_on_impl(ExperimentStep, ONIndex, _ReconnectedVNValues, NewVNValues, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
@@ -222,13 +285,15 @@ reconnect_on_impl(ExperimentStep, ONIndex, _ReconnectedVNValues, NewVNValues, #s
     % end, ReconnectedVNValues),
     maps:foreach(fun(VNGName, Value) ->
         VNG = maps:get(VNGName, VNGs),
-        vng:add_value(ExperimentStep, VNG, Value, ON, ONIndex)
+        vng:ensure_vn(VNG, Value, ExperimentStep)
     end, NewVNValues),
     NewVNs = maps:fold(fun(VNGName, _Value, Acc) -> 
         VNG = maps:get(VNGName, VNGs),
-        {ok, VN} = vng:wait_for_value_added(VNG),
+        {VN, _IsNew} = vng:wait_for_vn_ensured(VNG),
         Acc#{VNGName => VN}
     end, #{}, NewVNValues),
+
+    connect_all_vns_to_on(NewVNValues, VNGs, ON, ONIndex, ExperimentStep),
 
     on:remove_outdated_connections(ON, NewVNs, ExperimentStep),
 

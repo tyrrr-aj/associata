@@ -171,8 +171,6 @@ class AGDS(AAS):
 
         self._save_stimulation = save_stimulation if save_stimulation is not None else lambda exp_step: exp_step % 100 == 0
 
-        self._n_ons = 0
-
     async def add_numerical_vng(self, name, epsilon, min_value, max_value):
         await self._channel.send_backend_async((
             Atom('add_vng'), 
@@ -191,13 +189,11 @@ class AGDS(AAS):
         ))
 
     async def add_observation(self, vng_values, experiment_step):
-        # print(f'Adding observation {self._n_ons} with value={vng_values["value"]}\n')
-        self._n_ons += 1
-
+        # Note: with deduplication, this may return an existing ON index
+        # (if all VNs already exist and share a common ON, occurrences are incremented)
         add_observation_cmd = (Atom('add_observation'), experiment_step, vng_values)
-        # print(f'Adding observation: {add_observation_cmd}')
-        new_on_index = await self._query_backend(add_observation_cmd, self._parse_add_observation_response)
-        return new_on_index
+        on_index = await self._query_backend(add_observation_cmd, self._parse_add_observation_response)
+        return on_index
     
     async def get_on_for_exact_vn_values(self, vng_values):
         get_on_cmd = (Atom('get_on_for_exact_vn_values'), vng_values)
@@ -227,7 +223,9 @@ class AGDS(AAS):
             self._save_stimulation(experiment_step), 
             inference_setup.get_entries(), 
             inference_setup.get_modes_repr(), 
-            min_passed_stimulus
+            min_passed_stimulus,
+            inference_setup.get_vn_to_vn_weight_mode_repr(),
+            inference_setup.get_vn_to_on_weight_mode_repr()
         ))
         # print(f'{timestamp_str()}    waiting for inference response')
         await self._channel.receive_async(self._inference_timeout_sec)    # 'inference_finished'
@@ -365,12 +363,16 @@ class StimulationSetup:
         stimulated_vns (dict): A dictionary containing the stimulated virtual neurons and their stimuli.
         stimulated_ons (dict): A dictionary containing the stimulated output neurons and their stimuli.
         node_group_modes (dict): A dictionary containing the modes of the node groups. It must be exhaustive, i.e. all VNGs and an ONG must be present.
+        vn_to_vn_weight_mode (str): constant | classical_multiplicative | classical_subtractive
+        vn_to_on_weight_mode (str): constant | one_over_n_on | rate_of_occurance
     """
         
-    def __init__(self, node_group_modes):
+    def __init__(self, node_group_modes, vn_to_vn_weight_mode, vn_to_on_weight_mode):
         self.stimulated_vns = {}
         self.stimulated_ons = {}
         self.node_group_modes = node_group_modes
+        self.vn_to_vn_weight_mode = vn_to_vn_weight_mode
+        self.vn_to_on_weight_mode = vn_to_on_weight_mode
 
     """
     Stimulates a value neuron with the given name, value, and stimulus.
@@ -419,6 +421,14 @@ class StimulationSetup:
         }
 
         return {node_group_name: representations[mode] for node_group_name, mode in self.node_group_modes.items()}
+    
+
+    def get_vn_to_vn_weight_mode_repr(self):
+        return Atom(self.vn_to_vn_weight_mode)
+
+
+    def get_vn_to_on_weight_mode_repr(self):
+        return Atom(self.vn_to_on_weight_mode)
     
 
 class NodeGroupMode(Enum):
