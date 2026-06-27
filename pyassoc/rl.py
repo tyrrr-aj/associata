@@ -432,6 +432,15 @@ class TD_AGDS(TD):
     def _get_value_representation(self, value):
         return { 'value': float(value) }
 
+    
+
+    def _get_action_representation(self, action):
+        return { 'action': float(action[0]) }   # TODO: handles only one-dimensional action space
+    
+
+    def _get_value_representation(self, value):
+        return { 'value': float(value) }
+
 
     async def _store_observation_replacing(self, state_repr, action_repr, value_repr):
         on_for_state_action = await self.q.get_on_for_exact_vn_values(state_repr | action_repr)
@@ -444,7 +453,6 @@ class TD_AGDS(TD):
 
     async def _store_observation_counting(self, state_repr, action_repr, value_repr):
         await self.q.add_observation(state_repr | action_repr | value_repr, self._step_nr)
-
 
     async def _get_action_value_through_closest_vn(self, state, action, stimulation_name):
         sa_value_search = self._setup_search_from_state(
@@ -564,6 +572,7 @@ class TD_AGDS(TD):
 
     def _setup_search_from_state(self, state, ong_mode, action_mode, value_mode):
         search = self._setup_search(ong_mode, action_mode, value_mode, state_mode=associata.NodeGroupMode.transitive)
+        search = self._setup_search(ong_mode, action_mode, value_mode, state_mode=associata.NodeGroupMode.transitive)
         
         for f_name, f_value in zip(self._state_space_feature_names, state):
             search.stimulate_vn(str(f_name), f_value)
@@ -578,6 +587,12 @@ class TD_AGDS(TD):
     
 
     def _setup_search(self, ong_mode, action_mode, value_mode, state_mode):
+        search = self._setup_search(ong_mode, action_mode, value_mode, state_mode)        
+        search.stimulate_on(on_node)
+        return search
+    
+
+    def _setup_search(self, ong_mode, action_mode, value_mode, state_mode):
         node_group_modes = {
             'ong': ong_mode,
             'value': value_mode,
@@ -586,6 +601,7 @@ class TD_AGDS(TD):
             str(feature_name): state_mode for feature_name in self._state_space_feature_names
         }
 
+        search = associata.StimulationSetup(node_group_modes, self.vn_to_vn_weight_mode, self.vn_to_on_weight_mode)
         search = associata.StimulationSetup(node_group_modes, self.vn_to_vn_weight_mode, self.vn_to_on_weight_mode)
         return search
 
