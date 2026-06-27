@@ -264,7 +264,7 @@ process_events(#state{
                         accumulative -> [];
                         transitive -> lists:foldl(
                                 fun({VN, NeighValue}, Acc) ->
-                                    NeighStimulus = lists:max([0, get_weighted_vn_to_vn_stimulus(Stimulus, NeighValue, RepresentedValue, VNGMinValue, VNGMaxValue, VNToVNWeightMode)]),
+                                    NeighStimulus = lists:max([0, get_weighted_vn_to_vn_stimulus(VNToVNWeightMode, Stimulus, NeighValue, State)]),
                                     if 
                                         NeighStimulus >= MinPassedStimulus -> 
                                             vn:stimulate(VN, NeighStimulus, NewDepth, StimulationSpec),
@@ -517,11 +517,13 @@ process_events(#state{
     end.
 
 
-get_weighted_vn_to_vn_stimulus(NonWeightedStimulus, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue, VNToVNWeightMode) ->
+get_weighted_vn_to_vn_stimulus(VNToVNWeightMode, NonWeightedStimulus, TargetReprValue, 
+    #state{repr_value=OwnReprValue, vng_min_value=VNGMinValue, vng_max_value=VNGMaxValue, n_occurances = NOccurances}) ->
     case VNToVNWeightMode of
         constant -> NonWeightedStimulus * weight_vn_to_vn(constant, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue);
         classical_multiplicative -> NonWeightedStimulus * weight_vn_to_vn(classical_multiplicative, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue);
-        classical_subtractive -> NonWeightedStimulus - weight_vn_to_vn(classical_subtractive, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue)
+        classical_subtractive -> NonWeightedStimulus - weight_vn_to_vn(classical_subtractive, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue);
+        rate_of_occurance_subtractive -> (NonWeightedStimulus - weight_vn_to_vn(classical_subtractive, TargetReprValue, OwnReprValue, VNGMinValue, VNGMaxValue)) / NOccurances
     end.
 
 

@@ -195,10 +195,10 @@ class AGDS(AAS):
         on_index = await self._query_backend(add_observation_cmd, self._parse_add_observation_response)
         return on_index
     
-    async def get_on_for_exact_vn_values(self, vng_values):
-        get_on_cmd = (Atom('get_on_for_exact_vn_values'), vng_values)
-        on = await self._query_backend(get_on_cmd, self._parse_get_on_for_exact_vn_values)
-        return on
+    async def get_ons_for_exact_vn_values(self, vng_values):
+        get_ons_cmd = (Atom('get_ons_for_exact_vn_values'), vng_values)
+        ons = await self._query_backend(get_ons_cmd, self._parse_get_ons_for_exact_vn_values)
+        return ons
     
     async def reconnect_on(self, on_index, reconnected_vng_values, new_vng_values, experiment_step):
         # print(f'Reconnecting on {on_index} to new_vng_values={new_vng_values}\n')
@@ -323,12 +323,10 @@ class AGDS(AAS):
             case _:
                 return None
             
-    def _parse_get_on_for_exact_vn_values(self, message):
+    def _parse_get_ons_for_exact_vn_values(self, message):
         match message:
-            case (Atom('on_for_exact_vn_values'), Atom('none')):
-                return None
-            case (Atom('on_for_exact_vn_values'), on_index):
-                return on_index
+            case (Atom('ons_for_exact_vn_values'), on_indices):
+                return list(on_indices)
             case _:
                 return None
             

@@ -275,7 +275,7 @@ class TD_AGDS(TD):
         new_observations_treatment='replace', # 'replace' | 'add_and_count'
         value_selection_mode='closest_on', # 'closest_on' | 'closest_vn' | 'direct_on' | 'direct_or_closest_on'
         action_selection_mode='direct_on', # 'direct_on' | 'inference'
-        vn_to_vn_weight_mode='classical_subtractive', # 'constant' | 'classical_multiplicative' | 'classical_subtractive'
+        vn_to_vn_weight_mode='classical_subtractive', # 'constant' | 'classical_multiplicative' | 'classical_subtractive' | 'rate_of_occurance_subtractive'
         vn_to_on_weight_mode='constant' # 'constant' | 'one_over_n_on' | 'rate_of_occurance'
     ):
         self.structure_size_history = []
@@ -348,28 +348,26 @@ class TD_AGDS(TD):
             
 
     async def _pick_action_through_direct_on(self, state):
-        ons = await self.q.get_on_for_exact_vn_values(
+        on_indices = await self.q.get_ons_for_exact_vn_values(
             {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())}
         )
 
-        match ons:
-            case None:
+        match on_indices:
+            case []:
                 return self._get_random_action()
-            case (on1, on2):
-                on1_neighs = await self.q.get_on_neighbours(on1)
-                on2_neighs = await self.q.get_on_neighbours(on2)
+            case [single_on]:
+                neighs = await self.q.get_on_neighbours(single_on)
+                return self._get_action_from_on_neighs(neighs)
+            
+            case [*ons]:
+                all_ons_neighs = [await self.q.get_on_neighbours(on) for on in ons]
+                on_values = [self._get_sa_value_from_on_neighs(on_neighs) for on_neighs in all_ons_neighs]
 
-                on1_value = np.array([float(ef[2]) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'value'])
-                on2_value = np.array([float(ef[2]) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'value'])
-
-                if on1_value > on2_value:
-                    return np.array([int(float(ef[2])) for ef in on1_neighs if ef[0] == 'vn' and ef[1] == 'action'])
-                else:
-                    return np.array([int(float(ef[2])) for ef in on2_neighs if ef[0] == 'vn' and ef[1] == 'action'])
+                best_on_local_index = np.argmax(on_values)
+                best_on_neighs = all_ons_neighs[best_on_local_index]
+                best_action = self._get_action_from_on_neighs(best_on_neighs)
                 
-            case on:
-                neighs = await self.q.get_on_neighbours(on)
-                return np.array([int(float(ef[2])) for ef in neighs if ef[0] == 'vn' and ef[1] == 'action'])
+                return best_action
 
 
     async def _pick_action_through_inference(self, state):
@@ -384,7 +382,17 @@ class TD_AGDS(TD):
         if best_sa_neigh_nodes == []:
             return self._get_random_action()
 
-        return np.array([int(float(ef[2])) for ef in best_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'action'])
+        return self._get_action_from_on_neighs(best_sa_neigh_nodes)
+
+
+    def _get_action_from_on_neighs(self, on_neighs):
+        return np.array([int(float(vn_value)) for vn_value in self._get_on_neigh_repr_value_by_vng_name(on_neighs, 'action')])
+    
+    def _get_sa_value_from_on_neighs(self, on_neighs):
+        return np.array([float(vn_value) for vn_value in self._get_on_neigh_repr_value_by_vng_name(on_neighs, 'value')])
+    
+    def _get_on_neigh_repr_value_by_vng_name(self, on_neighs, vng_name):
+        return [ef[2] for ef in on_neighs if ef[0] == 'vn' and ef[1] == vng_name]
 
 
     async def _init_q(self):
@@ -443,12 +451,15 @@ class TD_AGDS(TD):
 
 
     async def _store_observation_replacing(self, state_repr, action_repr, value_repr):
-        on_for_state_action = await self.q.get_on_for_exact_vn_values(state_repr | action_repr)
+        on_for_state_action = await self.q.get_ons_for_exact_vn_values(state_repr | action_repr)
 
-        if on_for_state_action is None:
-            await self.q.add_observation(state_repr | action_repr | value_repr, self._step_nr)
-        else:
-            await self.q.reconnect_on(on_for_state_action, state_repr | action_repr, value_repr, self._step_nr)
+        match on_for_state_action:
+            case []:
+                await self.q.add_observation(state_repr | action_repr | value_repr, self._step_nr)
+            case [single_on]:
+                await self.q.reconnect_on(single_on, state_repr | action_repr, value_repr, self._step_nr)
+            case _:
+                raise ValueError(f"Multiple ONs matched for exact VN values for state={state_repr}, action={action_repr}: {on_for_state_action}")
 
 
     async def _store_observation_counting(self, state_repr, action_repr, value_repr):
@@ -474,18 +485,21 @@ class TD_AGDS(TD):
         return float(sa_value) if sa_value is not None else None
 
         
-    async def _get_action_value_through_direct_on(self, state, action, stimulation_name):
-        sa = await self.q.get_on_for_exact_vn_values(
+    async def _get_action_value_through_direct_on(self, state, action):
+        sa = await self.q.get_ons_for_exact_vn_values(
             {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, state.tolist())} | 
             {'action': float(action[0])}    # TODO: handles only one-dimensional action space
         )
 
-        if sa is None:
-            return None
-        else:
-            sa_value_neigh_nodes = await self.q.get_on_neighbours(sa)
-            sa_value = [float(ef[2]) for ef in sa_value_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
-            return float(sa_value)
+        match sa:
+            case []:
+                return None
+            case [single_sa]:
+                sa_value_neigh_nodes = await self.q.get_on_neighbours(single_sa)
+                sa_value = self._get_sa_value_from_on_neighs(sa_value_neigh_nodes)[0]
+                return float(sa_value)
+            case _:
+                raise ValueError(f"Multiple ONs matched for exact VN values for state={state}, action={action}: {sa}")
 
 
     async def _get_action_value_through_closest_on(self, state, action, stimulation_name):
@@ -522,10 +536,10 @@ class TD_AGDS(TD):
             action_value = await self._get_action_value_through_closest_vn(state, action, stimulation_name)
 
         elif self.value_selection_mode == 'direct_on':
-            action_value = await self._get_action_value_through_direct_on(state, action, stimulation_name)
+            action_value = await self._get_action_value_through_direct_on(state, action)
             
         elif self.value_selection_mode == 'direct_or_closest_on':
-            direct_value = await self._get_action_value_through_direct_on(state, action, stimulation_name)
+            direct_value = await self._get_action_value_through_direct_on(state, action)
             if direct_value is not None:
                 action_value = direct_value
             else:

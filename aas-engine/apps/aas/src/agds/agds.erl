@@ -110,8 +110,8 @@ handle_message(Msg, State) ->
             process_events(NewState);
 
         %% VNValues: #{VNGName := Value}
-        {get_on_for_exact_vn_values, VNValues} ->
-            NewState = get_on_for_exact_vn_values(VNValues, State),
+        {get_ons_for_exact_vn_values, VNValues} ->
+            NewState = get_ons_for_exact_vn_values(VNValues, State),
             process_events(NewState);
 
         %% ONIndex: integer, VNValues: #{VNGName := Value}
@@ -422,7 +422,7 @@ get_structure_size_impl(#state{structure_id = StructureId, node_groups = #node_g
     State.
     
 
-get_on_for_exact_vn_values(VNValues, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
+get_ons_for_exact_vn_values(VNValues, #state{structure_id = StructureId, node_groups = #node_groups{vngs = VNGs, ong = ONG}} = State) ->
     AllONIndices = ong:get_all_ON_indices(ONG),
     ONs = maps:fold(fun(VNGName, Value, Acc) -> 
         case sets:is_empty(Acc) of
@@ -438,24 +438,9 @@ get_on_for_exact_vn_values(VNValues, #state{structure_id = StructureId, node_gro
         end
     end, sets:from_list(AllONIndices), VNValues),
 
-    ONIndex = case sets:size(ONs) of
-        0 -> none;
-        1 -> hd(sets:to_list(ONs));
-        Size -> 
-            case maps:size(VNValues) < maps:size(VNGs) of
-                true -> 
-                    list_to_tuple(sets:to_list(ONs)); % returning tuple because returning list did not work with pyrlang
-                false ->
-                    ONsList = sets:to_list(ONs),
-                    io:format("ERROR: Multiple ONs matched for exact VN values!~n"),
-                    io:format("  VN Values: ~p~n", [VNValues]),
-                    io:format("  Matched ONs count: ~p~n", [Size]),
-                    io:format("  Matched ON indices: ~w~n", [ONsList]),
-                    error({multiple_ons_for_exact_vn_values, VNValues, Size, ONsList})
-            end
-    end,
+    ONsTuple = list_to_tuple(sets:to_list(ONs)), % returning tuple because returning list did not work with pyrlang
 
-    pyrlang:send_client(StructureId, {on_for_exact_vn_values, ONIndex}),
+    pyrlang:send_client(StructureId, {ons_for_exact_vn_values, ONsTuple}),
     State.
 
 
