@@ -5,10 +5,191 @@ import associata
 from abc import ABC, abstractmethod
 import time
 from plot_multidim import plot_3d_function_slice, plot_interactive_slices 
+from enum import Enum
+from mpl_toolkits.axes_grid1 import host_subplot
+import mpl_toolkits.axisartist as AA
+
+
+class TdLogger:
+    
+    def __init__(self, log_to='stdout', log_actions_picked=True, log_last_sa_value=False, log_next_sa_value=False):
+        self.log_to = log_to
+        self.log_actions_picked = log_actions_picked
+        self.log_last_sa_value = log_last_sa_value
+        self.log_next_sa_value = log_next_sa_value
+
+        self._time_origin = time.time()
+
+    def set_time_origin(self, time_origin):
+        self._time_origin = time_origin
+
+    def log_step(self, step_nr, action, old_last_sa_value, new_last_sa_value, next_sa_value):
+        message = self._header(step_nr)
+
+        if self.log_actions_picked:
+            message = self._append_action_picked_msg(message, step_nr, action)
+        if self.log_last_sa_value:
+            message = self._append_old_last_sa_value_msg(message, step_nr, old_last_sa_value)
+        if self.log_last_sa_value:
+            message = self._append_new_last_sa_value_msg(message, step_nr, new_last_sa_value)
+        if self.log_next_sa_value:
+            message = self._append_next_sa_value_msg(message, step_nr, next_sa_value)
+
+        message += '\n'
+
+        self._log(message)
+
+    def _header(self, step_nr):
+        return f'{self._timestamp()} {"=" * 10} Step {step_nr} {"=" * 10}'
+    
+    def _append_action_picked_msg(self, msg, step_nr, action):
+        return msg + f'\nStep {step_nr}: Picked action: {action}'
+    
+    def _append_old_last_sa_value_msg(self, msg, step_nr, old_last_sa_value):
+        return msg + f'\nStep {step_nr}: Old last SA value: {old_last_sa_value}'
+    
+    def _append_new_last_sa_value_msg(self, msg, step_nr, new_last_sa_value):
+        return msg + f'\nStep {step_nr}: New last SA value: {new_last_sa_value}'
+    
+    def _append_next_sa_value_msg(self, msg, step_nr, next_sa_value):
+        return msg + f'\nStep {step_nr}: Next SA value: {next_sa_value}'
+
+
+    def _log(self, message):
+        if self.log_to == 'stdout':
+            print(message)
+        elif self.log_to is not None:
+            with open(self.log_to, 'a') as f:
+                f.write(message + '\n')
+
+    def _timestamp(self):
+        return f'[{int(time.time() - self._time_origin)}s]'
+    
+
+class TdHistorian:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.prev_step_rewards = []
+
+        self.episode_end_step_numbers = []
+        self.episode_rewards = []
+        self.episode_reward = 0.0
+
+        self.action_selection_kinds = []
+
+        self.auxiliary_data = {}
+
+    def record_episode_end(self, step_nr, final_reward, save_score=True):
+        if save_score:
+            self.episode_end_step_numbers.append(step_nr)
+            self.episode_rewards.append(self.episode_reward + final_reward)
+
+        self.episode_reward = 0.0
+
+    def record_step(self, state, action, action_selection_kind, reward_for_prev_sa):
+        self.states.append(state)
+        self.actions.append(action)
+        self.action_selection_kinds.append(action_selection_kind)
+
+        if reward_for_prev_sa is not None:
+            self.prev_step_rewards.append(reward_for_prev_sa)
+            self.episode_reward += reward_for_prev_sa
+
+    def record_auxiliary_data(self, key, value):
+        if key not in self.auxiliary_data:
+            self.auxiliary_data[key] = []
+        self.auxiliary_data[key].append(value)
+
+
+class ActionSelectionKind(Enum):
+    EXPLORATORY = 1
+    EXPLOITATIVE = 2
+    EXPLOITATIVE_RANDOM = 3
+
+
+class TdPlotter:
+    def __init__(self, td_historian):
+        self.td_historian = td_historian
+
+    # x_labels: 'episodes' | 'steps'
+    # auxilary_data: list of keys from td_historian.auxiliary_data to plot on the same graph
+    def plot_episode_rewards(self, moving_average_window=1, x_labels='episodes', auxiliary_data=[]):
+        fig = plt.figure()
+        host = host_subplot(111, axes_class=AA.Axes)
+
+        avg_reward = np.convolve(self.td_historian.episode_rewards, np.ones(moving_average_window) / moving_average_window, 'valid')
+        x_ticks = self.td_historian.episode_end_step_numbers[moving_average_window - 1:] if x_labels == 'steps' else np.arange(moving_average_window - 1, len(self.td_historian.episode_rewards))
+        title = f'Episode Reward{f" (Moving Average, window={moving_average_window}" if moving_average_window > 1 else ""})'
+
+        axes = [host] + [host.twinx() for _ in range(len(auxiliary_data))]
+        parasites = axes[1:]
+
+        palette = plt.get_cmap('tab10')
+        main_color = palette(0)
+        parasites_colors = [palette(i + 1) for i in range(len(auxiliary_data))]
+
+        host.plot(x_ticks, avg_reward, label='Episode reward', color=main_color)
+        host.set_ylabel('Episode Reward')
+
+        for i, (key, color) in enumerate(zip(auxiliary_data, parasites_colors)):
+            aux_values = self.td_historian.auxiliary_data.get(key, [])
+            aux_values_ma = np.convolve(aux_values, np.ones(moving_average_window) / moving_average_window, 'valid')
+            
+            offset = 60 * (i)
+            parasites[i].axis['right'] = parasites[i].new_fixed_axis(loc='right', offset=(offset, 0))
+            parasites[i].axis['right'].toggle(all=True)
+
+            parasites[i].plot(x_ticks, aux_values_ma, label=key, color=color)
+            parasites[i].set_ylabel(key)
+
+        for i, ax in enumerate(axes):
+            ax_key = 'left' if ax is host else 'right'
+            ax.axis[ax_key].label.set_color(palette(i))
+            ax.axis[ax_key].major_ticks.set_color(palette(i))
+            ax.axis[ax_key].major_ticklabels.set_color(palette(i))
+
+        host.set_xlabel(x_labels)
+        host.set_title(title)
+
+        plt.show()
+
+    def plot_action_selection_kinds(self, moving_average_window=1):
+        fig = plt.figure()
+        host = host_subplot(111, axes_class=AA.Axes)
+
+        action_selection_kinds = [kind.value for kind in self.td_historian.action_selection_kinds]
+        action_selection_kinds_ma = np.convolve(action_selection_kinds, np.ones(moving_average_window) / moving_average_window, 'valid')
+        x_ticks = np.arange(len(action_selection_kinds_ma))
+
+        host.plot(x_ticks, action_selection_kinds_ma, label='Action Selection Kind', color='blue')
+        host.set_ylabel('Action Selection Kind (1: Exploratory, 2: Exploitative, 3: Exploitative Random)')
+
+        host.set_xlabel('Steps')
+        host.set_title('Action Selection Kinds Over Time')
+
+        plt.show()
+
+    def plot_actions(self, moving_average_window=1):
+        fig = plt.figure()
+        host = host_subplot(111, axes_class=AA.Axes)
+
+        actions = [action[0] for action in self.td_historian.actions]  # Assuming actions are arrays
+        actions_ma = np.convolve(actions, np.ones(moving_average_window) / moving_average_window, 'valid')
+        x_ticks = np.arange(len(actions_ma))
+
+        host.plot(x_ticks, actions_ma, label='Actions', color='green')
+        host.set_ylabel('Actions')
+
+        host.set_xlabel('Steps')
+        host.set_title('Actions Over Time')
+
+        plt.show()
 
 
 class TD(ABC):
-    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1.0, greedy_epsilon=0.1, state_space_feature_names=None):
+    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1.0, greedy_epsilon=0.1, state_space_feature_names=None,
+                 logger=None):
         self._state_space_bounds = state_space_bounds
         self._state_space_epsilon = state_space_epsilon
         self._state_space_shape = np.ceil((state_space_bounds[1, :] - state_space_bounds[0, :]) / state_space_epsilon).astype('int')
@@ -27,19 +208,12 @@ class TD(ABC):
 
         self._last_state = None
         self._last_action = None
-        self._acc_reward = 0.0
-        self.episode_rewards = []
-        self.episode_step_nr = []
 
         self._step_nr = 0
 
-        self._time_origin = time.time()
-
-        self._actions_taken_history = []
-
-
-    def _timestamp(self):
-        return f'[{int(time.time() - self._time_origin)}s]'
+        self.logger = logger
+        self.historian = TdHistorian()
+        self.plotter = TdPlotter(self.historian)
 
 
     async def step(self, observation, reward=None):
@@ -47,41 +221,33 @@ class TD(ABC):
             await self._init_q()
             self._is_initialized = True
 
-        print(f'\n=============== Step {self._step_nr} ===============')
-
         state = await self._get_state(observation)
-
-        # print(f'{self._timestamp()} State: {state}\nReward (for prevoius action): {reward}\n')
-
-        action = await self._get_action(state)
-        self._actions_taken_history.append(action)
-
-        print(f'{self._timestamp()} Picked action: {action}')
+        action, action_selection_kind = await self._get_action(state)
 
         if self._last_action is not None and reward is not None:
-            await self._update_q(state, action, reward)
-            self._acc_reward += reward
+            old_last_sa_value, new_last_sa_value, next_sa_value = await self._update_q(state, action, reward)
+        else:
+            old_last_sa_value, new_last_sa_value, next_sa_value = None, None, None
 
         self._last_state = state
         self._last_action = action
 
-        self._step_nr += 1
+        if self.logger is not None:
+            self.logger.log_step(self._step_nr, action, old_last_sa_value, new_last_sa_value, next_sa_value)
+        self.historian.record_step(state, action, action_selection_kind, reward)
 
+        self._step_nr += 1
         return action
     
 
-    async def reset_episode(self, final_reward=None, save_score=True):
+    async def reset_episode(self, final_reward=None, save_score=False):
         if final_reward is not None and self._last_state is not None and self._last_action is not None:
             await self._set_known_q_value(self._last_state, self._last_action, final_reward)
 
         self._last_state = None
         self._last_action = None
 
-        if save_score:
-            self.episode_rewards.append(self._acc_reward)
-            self.episode_step_nr.append(self._step_nr)
-        
-        self._acc_reward = 0.0
+        self.historian.record_episode_end(self._step_nr, final_reward, save_score=save_score)
 
 
     async def plot_policy(self, state_dims=(0, 1), action_dim=0, output_file_name=None):
@@ -144,17 +310,13 @@ class TD(ABC):
 
 
 class Sarsa(TD):
-    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1, greedy_epsilon=0.1, state_space_feature_names=None):
-        self._dont_know_history = []
-        self._exploratory_action_history = []
-        # self._state_history = {}
-        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha, gamma, greedy_epsilon, state_space_feature_names)
+    def __init__(self, state_space_bounds, state_space_epsilon, action_space, alpha=0.2, gamma=1, greedy_epsilon=0.1, state_space_feature_names=None,
+                 logger=None):
+        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha, gamma, greedy_epsilon, state_space_feature_names, logger)
 
     async def _get_state(self, observation):
         indices = np.floor((observation - self._state_space_bounds[0, :]) / self._state_space_epsilon)
         state = np.clip(indices, np.zeros(len(self._state_space_shape)), self._state_space_shape - 1).astype('int')
-        # if tuple(state) not in self._state_history:
-        #     self._state_history[tuple(state)] = len(self._state_history)
         return state
 
 
@@ -164,25 +326,20 @@ class Sarsa(TD):
 
         if np.random.random() < epsilon:
             # exploratory action
-            self._dont_know_history.append(0)
-            self._exploratory_action_history.append(1)
-            return np.array([np.random.choice(self._action_space)])
+            return np.array([np.random.choice(self._action_space)]), ActionSelectionKind.EXPLORATORY
 
         else:
             # exploiting action
-            self._exploratory_action_history.append(0)
-
             action_values = self.q[*state, :]
             max_action_value = np.max(action_values)
             max_actions = np.argwhere(action_values == max_action_value)
             if (len(max_actions) > 1):
                 action_index = np.random.randint(max_actions.shape[0])
-
-                self._dont_know_history.append(1)
+                selection_mode = ActionSelectionKind.EXPLOITATIVE_RANDOM
             else:
                 action_index = 0
-                self._dont_know_history.append(0)
-            return max_actions[action_index]
+                selection_mode = ActionSelectionKind.EXPLOITATIVE
+            return max_actions[action_index], selection_mode
         
 
     async def _init_q(self):
@@ -190,21 +347,15 @@ class Sarsa(TD):
 
 
     async def _update_q(self, next_state, next_action, reward):
-        # last_state_id = self._state_history[tuple(self._last_state)]
-        # next_state_id = self._state_history[tuple(next_state)]
-        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
-        # print(f"Last state={last_state_id}, last action={self._last_action}, last Q-value={self.q[*self._last_state, *self._last_action]}, reward={reward}")
-        # print(f"Next state={next_state_id}, next action={next_action}, next Q-value={self.q[*next_state, *next_action]}")
-        # print(f"Computation: new Q-value = {self.q[*self._last_state, *self._last_action]} + {self.alpha} * ({reward} + {self.gamma} * {self.q[*next_state, *next_action]} - {self.q[*self._last_state, *self._last_action]}) = {self.q[*self._last_state, *self._last_action] + self.alpha * (reward + self.gamma * self.q[*next_state, *next_action] - self.q[*self._last_state, *self._last_action])}")
-        # print("\n")
-        self.q[*self._last_state, *self._last_action] += self.alpha * (reward + self.gamma * self.q[*next_state, *next_action] - self.q[*self._last_state, *self._last_action])
+        old_last_sa_value = self.q[*self._last_state, *self._last_action]
+        next_sa_value = self.q[*next_state, *next_action]
+        new_last_sa_value = old_last_sa_value + self.alpha * (reward + self.gamma * next_sa_value - old_last_sa_value)
+        
+        self.q[*self._last_state, *self._last_action] = new_last_sa_value
+        return old_last_sa_value, new_last_sa_value, next_sa_value
 
 
     async def _set_known_q_value(self, state, action, reward):
-        # state_id = self._state_history[tuple(state)]
-        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
-        # print(f"Setting known Q-value for state={state_id}, action={action} to value={reward}")
-        # print("\n")
         self.q[*state, *action] = reward
 
 
@@ -220,7 +371,7 @@ class QLearning(TD):
 
         if np.random.random() < epsilon:
             # exploratory action
-            return np.array([np.random.choice(self._action_space)])
+            return np.array([np.random.choice(self._action_space)]), ActionSelectionKind.EXPLORATORY
 
         else:
             # exploiting action
@@ -229,9 +380,11 @@ class QLearning(TD):
             max_actions = np.argwhere(action_values == max_action_value)
             if (len(max_actions) > 1):
                 action_index = np.random.randint(max_actions.shape[0])
+                selection_mode = ActionSelectionKind.EXPLOITATIVE_RANDOM
             else:
                 action_index = 0
-            return max_actions[action_index]
+                selection_mode = ActionSelectionKind.EXPLOITATIVE
+            return max_actions[action_index], selection_mode
 
 
     async def _init_q(self):
@@ -240,7 +393,13 @@ class QLearning(TD):
 
     async def _update_q(self, next_state, _next_action, reward):
         max_q = np.max(self.q[*next_state, :])
-        self.q[*self._last_state, *self._last_action] += self.alpha * (reward + self.gamma * max_q - self.q[*self._last_state, *self._last_action])
+
+        old_last_sa_value = self.q[*self._last_state, *self._last_action]
+        next_sa_value = max_q
+        new_last_sa_value = old_last_sa_value + self.alpha * (reward + self.gamma * next_sa_value - old_last_sa_value)
+
+        self.q[*self._last_state, *self._last_action] = new_last_sa_value
+        return old_last_sa_value, new_last_sa_value, next_sa_value
 
 
     async def _set_known_q_value(self, state, action, reward):
@@ -253,37 +412,39 @@ class TD_AGDS(TD):
         pass
 
     def __init__(
-        self,
-        state_space_feature_names,
-        state_space_bounds,
-        state_space_epsilon,
-        action_space,
-        alpha=0.25,
-        gamma=1.0,
-        greedy_epsilon=0.1,
-        save_stimulations_in_step=None,
-        min_passed_stimulus_vng=0.0,
-        min_vn_excitation=0.0,
-        min_passed_stimulus_ong=0.0,
-        min_on_excitation=0.0,
-        poison_min_passed_stimulus=0.0,
-        poison_deadly_dose=None,
-        poison_min_acc_dose=0.0,
-        value_epsilon=0.01,
-        min_value=0.0,
-        max_value=1.0,
-        new_observations_treatment='replace', # 'replace' | 'add_and_count'
-        value_selection_mode='closest_on', # 'closest_on' | 'closest_vn' | 'direct_on' | 'direct_or_closest_on'
-        action_selection_mode='direct_on', # 'direct_on' | 'inference'
-        vn_to_vn_weight_mode='classical_subtractive', # 'constant' | 'classical_multiplicative' | 'classical_subtractive' | 'rate_of_occurance_subtractive'
-        vn_to_on_weight_mode='constant' # 'constant' | 'one_over_n_on' | 'rate_of_occurance'
-    ):
-        self.structure_size_history = []
-        self._save_stimulations_in_step = save_stimulations_in_step
-        self._dont_know_history = []
-        self._exploratory_action_history = []
+        self
+        
+        , state_space_feature_names
+        , state_space_bounds
+        , state_space_epsilon
+        , action_space
+        
+        , alpha=0.25
+        , gamma=1.0
+        , greedy_epsilon=0.1
 
-        # HYPERPARAMETERS (extracted for external modification)
+        , min_passed_stimulus_vng=0.0
+        , min_vn_excitation=0.0
+        , min_passed_stimulus_ong=0.0
+        , min_on_excitation=0.0
+        , poison_min_passed_stimulus=0.0
+        , poison_deadly_dose=None
+        , poison_min_acc_dose=0.0
+        , value_epsilon=0.01
+        , min_value=0.0
+        , max_value=1.0
+        
+        , new_observations_treatment='replace' # 'replace' | 'add_and_count'
+        , value_selection_mode='closest_on' # 'closest_on' | 'closest_vn' | 'direct_on' | 'direct_or_closest_on'
+        , action_selection_mode='direct_on' # 'direct_on' | 'inference'
+        , vn_to_vn_weight_mode='classical_subtractive' # 'constant' | 'classical_multiplicative' | 'classical_subtractive' | 'rate_of_occurance_subtractive'
+        , vn_to_on_weight_mode='constant' # 'constant' | 'one_over_n_on' | 'rate_of_occurance'
+
+        , save_stimulations_in_step=None
+        , logger=None
+
+    ):
+        # HYPERPARAMETERS
         self.min_passed_stimulus_vng = min_passed_stimulus_vng
         self.min_vn_excitation = min_vn_excitation
         self.min_passed_stimulus_ong = min_passed_stimulus_ong
@@ -300,7 +461,9 @@ class TD_AGDS(TD):
         self.vn_to_vn_weight_mode = vn_to_vn_weight_mode
         self.vn_to_on_weight_mode = vn_to_on_weight_mode
 
-        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedy_epsilon=greedy_epsilon, state_space_feature_names=state_space_feature_names)
+        self._save_stimulations_in_step = save_stimulations_in_step
+
+        super().__init__(state_space_bounds, state_space_epsilon, action_space, alpha=alpha, gamma=gamma, greedy_epsilon=greedy_epsilon, state_space_feature_names=state_space_feature_names, logger=logger)
 
 
     async def stop(self):
@@ -317,7 +480,7 @@ class TD_AGDS(TD):
 
     async def reset_episode(self, final_reward=None, save_score=True):
         if save_score and hasattr(self, 'q'):
-            self.structure_size_history.append(await self.q.get_structure_size())
+            self.record_auxiliary_data('structure_size', await self.q.get_structure_size())
         return await super().reset_episode(final_reward, save_score)
 
 
@@ -333,7 +496,7 @@ class TD_AGDS(TD):
             # exploratory action
             self._dont_know_history.append(0)
             self._exploratory_action_history.append(1)
-            return self._get_random_action()
+            return self._get_random_action(), ActionSelectionKind.EXPLORATORY
 
         else:
             # exploiting action
@@ -354,10 +517,10 @@ class TD_AGDS(TD):
 
         match on_indices:
             case []:
-                return self._get_random_action()
+                return self._get_random_action(), ActionSelectionKind.EXPLOITATIVE_RANDOM
             case [single_on]:
                 neighs = await self.q.get_on_neighbours(single_on)
-                return self._get_action_from_on_neighs(neighs)
+                return self._get_action_from_on_neighs(neighs), ActionSelectionKind.EXPLOITATIVE
             
             case [*ons]:
                 all_ons_neighs = [await self.q.get_on_neighbours(on) for on in ons]
@@ -367,7 +530,7 @@ class TD_AGDS(TD):
                 best_on_neighs = all_ons_neighs[best_on_local_index]
                 best_action = self._get_action_from_on_neighs(best_on_neighs)
                 
-                return best_action
+                return best_action, ActionSelectionKind.EXPLOITATIVE
 
 
     async def _pick_action_through_inference(self, state):
@@ -380,9 +543,9 @@ class TD_AGDS(TD):
         best_sa_neigh_nodes = await self.q.get_on_neighbours(int(best_sa))
 
         if best_sa_neigh_nodes == []:
-            return self._get_random_action()
+            return self._get_random_action(), ActionSelectionKind.EXPLOITATIVE_RANDOM
 
-        return self._get_action_from_on_neighs(best_sa_neigh_nodes)
+        return self._get_action_from_on_neighs(best_sa_neigh_nodes), ActionSelectionKind.EXPLOITATIVE
 
 
     def _get_action_from_on_neighs(self, on_neighs):
@@ -405,9 +568,10 @@ class TD_AGDS(TD):
 
     async def _update_q(self, next_state, next_action, reward):
         last_sa_value = await self._search_for_action_value(self._last_state, self._last_action, 'last_sa_value_search')
-        updated_last_sa_value = await self._updated_q_value(last_sa_value, next_state, next_action, reward)
+        updated_last_sa_value, next_sa_value = await self._updated_q_value(last_sa_value, next_state, next_action, reward)
 
         await self._store_observation(self._last_state, self._last_action, updated_last_sa_value)
+        return last_sa_value, updated_last_sa_value, next_sa_value
 
 
     async def _set_known_q_value(self, state, action, value):
@@ -601,12 +765,6 @@ class TD_AGDS(TD):
     
 
     def _setup_search(self, ong_mode, action_mode, value_mode, state_mode):
-        search = self._setup_search(ong_mode, action_mode, value_mode, state_mode)        
-        search.stimulate_on(on_node)
-        return search
-    
-
-    def _setup_search(self, ong_mode, action_mode, value_mode, state_mode):
         node_group_modes = {
             'ong': ong_mode,
             'value': value_mode,
@@ -681,22 +839,7 @@ class SarsaAGDS(TD_AGDS):
         next_sa_value = await self._search_for_action_value(next_state, next_action, 'next_sa_value_search')        
         new_q_value = last_sa_value + self.alpha * (reward + self.gamma * next_sa_value - last_sa_value)
 
-        # last_state_on = await self.q.get_on_for_exact_vn_values(
-        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, self._last_state.tolist())} | 
-        #     {'action': float(self._last_action[0])}    # TODO: handles only one-dimensional action space
-        # )
-        # next_state_on = await self.q.get_on_for_exact_vn_values(
-        #     {str(f_name): float(f_value) for f_name, f_value in zip(self._state_space_feature_names, next_state.tolist())} | 
-        #     {'action': float(next_action[0])}    # TODO: handles only one-dimensional action space  
-        # )
-
-        # print("=" * 10 + f' Step {self._step_nr} Q-value update ' + "=" * 10)
-        # print(f"Last state={last_state_on}, last action={self._last_action}, last Q-value={last_sa_value}, reward={reward}")
-        # print(f"Next state={next_state_on}, next action={next_action}, next Q-value={next_sa_value}")
-        # print(f"Computation: new Q-value = {last_sa_value} + {self.alpha} * ({reward} + {self.gamma} * {next_sa_value} - {last_sa_value}) = {new_q_value}")
-        # print("\n")
-
-        return new_q_value
+        return new_q_value, next_sa_value
 
 
 class QLearningAGDS(TD_AGDS):
@@ -712,4 +855,6 @@ class QLearningAGDS(TD_AGDS):
             else:
                 best_next_sa_value = [float(ef[2]) for ef in best_next_sa_neigh_nodes if ef[0] == 'vn' and ef[1] == 'value'][0]
 
-        return last_sa_value + self.alpha * (reward + self.gamma * best_next_sa_value - last_sa_value)
+        updated_last_sa_value = last_sa_value + self.alpha * (reward + self.gamma * best_next_sa_value - last_sa_value)
+
+        return updated_last_sa_value, best_next_sa_value
